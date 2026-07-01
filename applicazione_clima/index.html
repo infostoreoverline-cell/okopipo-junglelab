@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Okopipi Jungle Lab - Monitoraggio Climatico</title>
+    <!-- Google Fonts: Anton (per i titoli impattanti) e Inter (per il testo leggibile) -->
+    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- CONTENITORE GENERALE -->
+    <div class="app-container">
+        
+        <!-- HEADER IN STILE OKOPIPI -->
+        <header class="app-header">
+            <div class="logo-area">
+                <h1 class="logo-title">OKOPIPI</h1>
+                <h2 class="logo-subtitle">JUNGLE LAB</h2>
+            </div>
+            <p class="section-tagline">SISTEMA DI MONITORAGGIO CLIMATICO</p>
+        </header>
+
+        <!-- SEZIONE CONFIGURAZIONE INIZIALE (Mostrata solo se manca la URL di Apps Script) -->
+        <section id="setupGuide" class="setup-guide card">
+            <h3 class="card-title">CONFIGURAZIONE BACKEND</h3>
+            <p class="guide-text">
+                Per visualizzare i dati dei termoigrometri, incolla qui sotto la <strong>URL Web App</strong> generata distribuendo il codice Apps Script sul tuo Google Sheet.
+            </p>
+            <div class="setup-form">
+                <input type="url" id="scriptUrlInput" placeholder="https://script.google.com/macros/s/..." class="input-square">
+                <button id="btnSaveUrl" class="btn-square">SALVA CONFIGURAZIONE</button>
+            </div>
+            <div class="guide-instructions">
+                <h4>Come ottenere la URL:</h4>
+                <ol>
+                    <li>Apri il tuo foglio Google.</li>
+                    <li>Vai su <strong>Estensioni</strong> &rarr; <strong>Apps Script</strong>.</li>
+                    <li>Copia il codice del file <code>google_apps_script.js</code> nell'editor.</li>
+                    <li>Fai clic su <strong>Distribuisci</strong> &rarr; <strong>Nuova distribuzione</strong>.</li>
+                    <li>Seleziona <strong>Applicazione web</strong>, imposta l'accesso su <strong>Chiunque</strong> e fai clic su <strong>Distribuisci</strong>.</li>
+                    <li>Copia l'URL fornito e incollalo qui sopra.</li>
+                </ol>
+            </div>
+        </section>
+
+        <!-- DASHBOARD CLIMATICA (Nascosta se non configurata, mostrata via JS) -->
+        <main id="dashboardMain" class="dashboard-main" style="display: none;">
+            
+            <!-- CONTROLLI E LIVE STATUS -->
+            <div class="controls-bar card">
+                <div class="control-group">
+                    <label for="deviceSelector" class="control-label">TERRARIO / BOX:</label>
+                    <select id="deviceSelector" class="select-square">
+                        <option value="all">Tutti i Terrari</option>
+                    </select>
+                </div>
+                
+                <div class="status-indicator-group">
+                    <div id="livePulse" class="live-pulse-badge">
+                        <span class="pulse-dot"></span>
+                        <span id="pulseText" class="pulse-text">LIVE</span>
+                    </div>
+                    <span id="lastUpdatedTime" class="update-time-label">Ultimo aggiornamento: --:--:--</span>
+                </div>
+            </div>
+
+            <!-- VALORI IN TEMPO REALE -->
+            <div class="live-values-grid">
+                
+                <!-- Temperatura -->
+                <div class="card val-card temp-card">
+                    <div class="val-header">
+                        <span class="val-icon">🔥</span>
+                        <span class="val-label">TEMPERATURA</span>
+                    </div>
+                    <div class="val-display">
+                        <span id="currentTemp" class="val-number">--.-</span>
+                        <span class="val-unit">&deg;C</span>
+                    </div>
+                </div>
+
+                <!-- Umidità -->
+                <div class="card val-card hum-card">
+                    <div class="val-header">
+                        <span class="val-icon">💧</span>
+                        <span class="val-label">UMIDITÀ RELATIVA</span>
+                    </div>
+                    <div class="val-display">
+                        <span id="currentHum" class="val-number">--.-</span>
+                        <span class="val-unit">% RH</span>
+                    </div>
+                </div>
+                
+            </div>
+
+            <!-- GRAFICO STORICO -->
+            <div class="card chart-card">
+                <div class="chart-header-row">
+                    <h3 class="card-title">ANDAMENTO CLIMATICO</h3>
+                    
+                    <!-- Selettore Range Temporale -->
+                    <div class="range-selector">
+                        <button class="btn-range" data-range="24h">24 ORE</button>
+                        <button class="btn-range active" data-range="7d">7 GIORNI</button>
+                        <button class="btn-range" data-range="30d">30 GIORNI</button>
+                        <button class="btn-range" data-range="all">TUTTO</button>
+                    </div>
+                </div>
+
+                <div id="chartSpinner" class="spinner-container" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Caricamento dati dal cloud...</p>
+                </div>
+                
+                <div id="emptyDataPlaceholder" class="empty-placeholder" style="display: none;">
+                    <span class="placeholder-icon">📡</span>
+                    <p>Nessun dato climatico trovato per questo intervallo.</p>
+                    <p class="placeholder-subtext">Controlla che i termoigrometri stiano inviando dati al foglio.</p>
+                </div>
+
+                <div class="chart-wrapper">
+                    <canvas id="climateChart"></canvas>
+                </div>
+            </div>
+
+            <!-- STATISTICHE DEL PERIODO -->
+            <div class="stats-section-title">STATISTICHE PERIODO SELEZIONATO</div>
+            <div class="stats-grid">
+                
+                <!-- Statistiche Temperatura -->
+                <div class="card stat-card temp-stat">
+                    <h4 class="stat-card-title">TEMPERATURA (&deg;C)</h4>
+                    <div class="stat-rows-container">
+                        <div class="stat-row">
+                            <span class="stat-label">MINIMA</span>
+                            <span id="tempMin" class="stat-value text-temp">--.-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">MEDIA</span>
+                            <span id="tempAvg" class="stat-value text-temp">--.-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">MASSIMA</span>
+                            <span id="tempMax" class="stat-value text-temp">--.-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Statistiche Umidità -->
+                <div class="card stat-card hum-stat">
+                    <h4 class="stat-card-title">UMIDITÀ (% RH)</h4>
+                    <div class="stat-rows-container">
+                        <div class="stat-row">
+                            <span class="stat-label">MINIMA</span>
+                            <span id="humMin" class="stat-value text-hum">--.-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">MEDIA</span>
+                            <span id="humAvg" class="stat-value text-hum">--.-</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">MASSIMA</span>
+                            <span id="humMax" class="stat-value text-hum">--.-</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- TABELLA DATI RECENTI -->
+            <div class="card table-card">
+                <h3 class="card-title">REGISTRO LETTURE RECENTI</h3>
+                <div class="table-container">
+                    <table id="readingsTable">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Terrario</th>
+                                <th>Temperatura</th>
+                                <th>Umidità</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td colspan="4" class="table-empty">Caricamento delle letture in corso...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </main>
+
+        <!-- FOOTER E RESET CONFIGURAZIONE -->
+        <footer class="app-footer">
+            <p class="copy">&copy; 2026 Okopipi Jungle Lab. Tutti i diritti riservati.</p>
+            <button id="btnResetConfig" class="btn-reset-link" style="display: none;">Modifica URL Web App</button>
+        </footer>
+
+    </div>
+
+    <!-- Script Logico principale -->
+    <script src="app.js"></script>
+</body>
+</html>
