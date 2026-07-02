@@ -86,6 +86,11 @@ function doGet(e) {
     
     // Leggi l'anagrafica dei sensori per mapparli nel JSON
     var sensoriMappa = {};
+    
+    // Aggiungi SEMPRE il sensore fittizio/demo per consentire il test dell'interfaccia
+    var demoId = 'DEMO_SENSOR_01';
+    sensoriMappa[demoId] = 'Terrario Demo (Fittizio)';
+    
     if (sensoriSheet.getLastRow() > 1) {
       var sensoriDati = sensoriSheet.getRange(2, 1, sensoriSheet.getLastRow() - 1, 2).getValues();
       for (var s = 0; s < sensoriDati.length; s++) {
@@ -111,6 +116,13 @@ function doGet(e) {
     } // 'all' mantiene limitMs = 0
     
     var risultati = [];
+    
+    // Genera dati fittizi/demo dinamici per il sensore fittizio
+    var mockData = generateMockData(range, now);
+    for (var m = 0; m < mockData.length; m++) {
+      risultati.push(mockData[m]);
+    }
+    
     if (datiSheet.getLastRow() > 1) {
       var headers = datiSheet.getRange(1, 1, 1, 4).getValues()[0];
       var rawValues = datiSheet.getRange(2, 1, datiSheet.getLastRow() - 1, 4).getValues();
@@ -168,6 +180,59 @@ function doGet(e) {
       message: err.toString()
     });
   }
+}
+
+// Generatore di dati fittizi realistici ad andamento sinusoidale
+function generateMockData(range, now) {
+  var mock = [];
+  var count = 24;
+  var intervalMs = 60 * 60 * 1000; // 1 ora
+  
+  if (range === '24h') {
+    count = 24;
+    intervalMs = 60 * 60 * 1000;
+  } else if (range === '7d') {
+    count = 42;
+    intervalMs = 4 * 60 * 60 * 1000;
+  } else if (range === '30d' || range === 'all') {
+    count = 60;
+    intervalMs = 12 * 60 * 60 * 1000;
+  }
+  
+  var baseTemp = 24.5;
+  var baseHum = 65.0;
+  
+  for (var i = 0; i < count; i++) {
+    var timeMs = now - (count - 1 - i) * intervalMs;
+    var dateObj = new Date(timeMs);
+    
+    var hour = dateObj.getHours();
+    // Picco di temperatura intorno alle 15:00, minimo alle 04:00
+    var rad = (hour - 4) * (2 * Math.PI / 24);
+    var tempOsc = Math.sin(rad) * 3.5;  // variazione +/- 3.5 °C
+    var humOsc = -Math.sin(rad) * 12.0; // umidità speculare alla temp +/- 12%
+    
+    // Aggiungi un piccolo disturbo casuale per renderlo reale
+    var noiseTemp = (Math.random() - 0.5) * 0.8;
+    var noiseHum = (Math.random() - 0.5) * 3.0;
+    
+    var temp = baseTemp + tempOsc + noiseTemp;
+    var hum = baseHum + humOsc + noiseHum;
+    
+    if (hum > 100) hum = 100;
+    if (hum < 0) hum = 0;
+    
+    var isoString = Utilities.formatDate(dateObj, "Europe/Rome", "yyyy-MM-dd'T'HH:mm:ss");
+    
+    mock.push({
+      timestamp: isoString,
+      device_id: 'DEMO_SENSOR_01',
+      sensor_name: 'Terrario Demo (Fittizio)',
+      temperature: parseFloat(temp.toFixed(1)),
+      humidity: parseFloat(hum.toFixed(1))
+    });
+  }
+  return mock;
 }
 
 // ══════════════════════════════════════════════════════════════
