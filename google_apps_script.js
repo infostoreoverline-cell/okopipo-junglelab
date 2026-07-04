@@ -1,1186 +1,393 @@
 // ╔══════════════════════════════════════════════════════════════════╗
-// ║  D.U.B.I.A. — Google Apps Script Backend V3                     ║
-// ║  Dynamic Updating Biomass Inference Algorithm                    ║
+// ║  OKOPIPI JUNGLE LAB — Google Apps Script Climate Backend V1.0     ║
 // ║                                                                  ║
 // ║  Architettura:                                                   ║
-// ║    • Schema Rigido: SCHEMAS whitelist per ogni foglio             ║
-// ║    • LockService: serializza tutte le scritture simultanee       ║
-// ║    • CacheService con chunking 90KB per doGet performante        ║
-// ║    • Idempotenza L1 (Cache 2h) + L2 (scan foglio)               ║
-// ║    • Routing pulito con validazione event_type                   ║
-// ║    • Zero side-effects: funzioni pure e isolate                  ║
+// ║    • Auto-creazione fogli e intestazioni alla prima esecuzione    ║
+// ║    • Ingestione dati da ESP8266: supporta sia JSON che CSV        ║
+// ║    • Gestione del timestamp a ritroso per batch di letture        ║
+// ║    • Auto-registrazione dei sensori sconosciuti                   ║
+// ║    • Servizio GET con filtri temporali (24h, 7gg, 30gg, Tutto)    ║
 // ╚══════════════════════════════════════════════════════════════════╝
 
 // ══════════════════════════════════════════════════════════════
 // CONFIGURAZIONE GLOBALE
 // ══════════════════════════════════════════════════════════════
 
-/**
- * ID del tuo Google Spreadsheet.
- * Ricavalo dall'URL: https://docs.google.com/spreadsheets/d/QUESTO_VALORE/edit
- */
-var SPREADSHEET_ID = '135VLAsiFTJtOHVJS1vglgX09XJbR7IQyR6HMixD8hQM';
-
-// ── Nomi dei fogli ─────────────────────────────────────────────
+// I fogli e le intestazioni rigide
 var SHEET_NAMES = {
-  TIMELINE:        'Timeline',
-  COLONIE:         'Colonie',
-  CLIENTI:         'Clienti',
-  CESSIONI:        'Cessioni',
-  TERMOIGROMETRI:  'Termoigrometri',
-  SENSORI:         'Sensori'
+  DATI: 'DatiClima',
+  SENSORI: 'Sensori'
 };
 
-// ── Schema Rigido ──────────────────────────────────────────────
-// Ogni foglio ha una lista ORDINATA di colonne.
-// Solo queste colonne verranno scritte. Qualsiasi campo extra
-// nel payload JSON viene IGNORATO silenziosamente.
-// L'ORDINE qui è l'ordine delle colonne nel foglio (Riga 1).
 var SCHEMAS = {
-  Timeline: [
-    'event_id',
-    'event_type',
-    'date',
-    'total_weight',
-    'food_amount',
-    'harvest_amount',
-    'adult_ratio',
-    'predicted_weight',
-    'health_index',
-    'is_new_blood',
-    'notes',
-    'colony_id',
-    'colony_weight_after'
-  ],
-  Colonie: [
-    'id',
-    'date',
-    'name',
-    'type',
-    'current_weight',
-    'males_count',
-    'females_count',
-    'subadults_count',
-    'medium_count',
-    'small_count',
-    'baby_count',
-    'notes',
-    'is_deleted'
-  ],
-  Clienti: [
-    'id',
-    'nome',
-    'cognome',
-    'citta',
-    'telefono',
-    'email',
-    'animale',
-    'note',
-    'data_aggiunta',
-    'is_deleted'
-  ],
-  Cessioni: [
-    'id',
-    'cliente_id',
-    'data',
-    'tipo_blatta',
-    'quantita_g',
-    'prezzo_unit',
-    'totale_euro',
-    'note',
-    'is_deleted'
-  ],
-  // ── Termoigrometri: dati ambientali ESP8266/SHT40 ──────────────
-  // Ogni riga = una lettura singola (un ciclo = 60 letture/ora).
-  // timestamp: ISO 8601 generato lato server GAS (non dipende dall'orologio ESP).
-  // device_id: MAC address dell'ESP che ha inviato il batch.
-  // temperature: float in °C (t10 / 10.0)
-  // humidity:    float in % RH (h10 / 10.0)
-  Termoigrometri: [
-    'timestamp',
-    'device_id',
-    'temperature',
-    'humidity'
+  DatiClima: [
+    'Timestamp',
+    'DeviceID',
+    'Temperature',
+    'Humidity'
   ],
   Sensori: [
-    'id',
-    'nome',
-    'is_deleted'
+    'DeviceID',
+    'Nome'
   ]
 };
-
-// ── Routing valido per doPost ──────────────────────────────────
-// Mappa event_type → azione. Se non è in questa lista → errore.
-var VALID_EVENT_TYPES = {
-  'pesata':               'timeline',
-  'cibo':                 'timeline',
-  'prelievo':             'timeline',
-  'calibrazione':         'timeline',
-  'nuovo_sangue':         'timeline',
-  'transfer':             'timeline',   // Trasferimento biomassa tra colonie (tracciabilità)
-  'colonia_sync':         'entity_upsert',
-  'colonia_delete':       'entity_delete',
-  'cliente_sync':         'entity_upsert',
-  'cliente_delete':       'entity_delete',
-  'cessione_sync':        'entity_upsert',
-  'cessione_delete':      'entity_delete',
-  'termoigrometro_data':  'termoigrometro', // Batch letture T/U da ESP8266
-  'sensore_sync':         'entity_upsert',
-  'sensore_delete':       'entity_delete'
-};
-
-// ── Cache Config ───────────────────────────────────────────────
-var CACHE_CHUNK_SIZE = 90000;  // 90KB per chunk (limite GAS = 100KB)
-var CACHE_TTL        = 300;    // 5 minuti
-var IDEM_CACHE_TTL   = 7200;   // 2 ore per idempotenza L1
-
-// ── Alerting ───────────────────────────────────────────────────
-var ALERT_EMAIL = '';  // Inserisci la tua email per ricevere crash report (es. 'tuo@gmail.com')
-
 
 // ══════════════════════════════════════════════════════════════
 // UTILITY: JSON Response Builder
 // ══════════════════════════════════════════════════════════════
-
 function buildJsonResponse(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-
 // ══════════════════════════════════════════════════════════════
-// UTILITY: Logging
+// UTILITY: Inizializza intestazioni e fogli
 // ══════════════════════════════════════════════════════════════
-
-function debugLog(context, detail) {
-  Logger.log('[D.U.B.I.A.] ' + context + ': ' + JSON.stringify(detail));
-}
-
-
-// ══════════════════════════════════════════════════════════════
-// UTILITY: Sanitizzazione Anti Formula Injection
-// ══════════════════════════════════════════════════════════════
-// Se un valore stringa inizia con =, +, -, @ (caratteri che Google
-// Sheets interpreta come formula), viene neutralizzato con un
-// apostrofo iniziale per forzare la lettura come puro testo.
-
-/**
- * Sanitizza un valore prima di scriverlo in Google Sheets.
- * Previene CSV/Formula Injection.
- * @param {*} val
- * @returns {*}
- */
-function sanitizeValue(val) {
-  if (typeof val === 'string' && val.length > 0 && /^[=+\-@]/.test(val)) {
-    return "'" + val;
-  }
-  return val;
-}
-
-
-// ══════════════════════════════════════════════════════════════
-// CACHE: Lettura/Scrittura con Chunking Automatico
-// ══════════════════════════════════════════════════════════════
-// Google CacheService ha un limite di 100KB per valore.
-// Per dataset grandi, spezziamo il JSON in chunk < 90KB
-// e li salviamo come chiavi separate (key__0, key__1, ...).
-// Un contatore key__meta tiene traccia del numero di chunk.
-
-/**
- * Salva un oggetto in cache, spezzandolo in chunk se necessario.
- * @param {Cache} cache - CacheService.getScriptCache()
- * @param {string} key - Chiave base
- * @param {*} value - Oggetto da serializzare
- */
-function cacheSet(cache, key, value) {
-  try {
-    var json = JSON.stringify(value);
-    
-    if (json.length <= CACHE_CHUNK_SIZE) {
-      // Caso semplice: entra in un solo chunk
-      cache.put(key + '__meta', '1', CACHE_TTL);
-      cache.put(key + '__0', json, CACHE_TTL);
-    } else {
-      // Spezza in chunk
-      var chunks = [];
-      for (var i = 0; i < json.length; i += CACHE_CHUNK_SIZE) {
-        chunks.push(json.substring(i, i + CACHE_CHUNK_SIZE));
-      }
-      cache.put(key + '__meta', String(chunks.length), CACHE_TTL);
-      for (var c = 0; c < chunks.length; c++) {
-        cache.put(key + '__' + c, chunks[c], CACHE_TTL);
-      }
-    }
-  } catch (e) {
-    debugLog('cacheSet error', e.toString());
-  }
-}
-
-/**
- * Legge un oggetto dalla cache, ricomponendo i chunk.
- * @param {Cache} cache
- * @param {string} key
- * @returns {*|null} Oggetto deserializzato o null se non in cache
- */
-function cacheGet(cache, key) {
-  try {
-    var metaStr = cache.get(key + '__meta');
-    if (!metaStr) return null;
-    
-    var numChunks = parseInt(metaStr, 10);
-    if (isNaN(numChunks) || numChunks <= 0) return null;
-    
-    var json = '';
-    for (var c = 0; c < numChunks; c++) {
-      var chunk = cache.get(key + '__' + c);
-      if (chunk === null) return null; // Chunk scaduto → cache miss
-      json += chunk;
-    }
-    
-    return JSON.parse(json);
-  } catch (e) {
-    debugLog('cacheGet error', e.toString());
-    return null;
-  }
-}
-
-/**
- * Invalida una chiave cache (rimuove meta + tutti i chunk).
- * @param {Cache} cache
- * @param {string} key
- */
-function cacheInvalidate(cache, key) {
-  try {
-    var metaStr = cache.get(key + '__meta');
-    if (metaStr) {
-      var numChunks = parseInt(metaStr, 10) || 0;
-      var keysToRemove = [key + '__meta'];
-      for (var c = 0; c < numChunks; c++) {
-        keysToRemove.push(key + '__' + c);
-      }
-      cache.removeAll(keysToRemove);
-    }
-  } catch (e) {
-    debugLog('cacheInvalidate error', e.toString());
-  }
-}
-
-
-// ══════════════════════════════════════════════════════════════
-// IDEMPOTENZA: L1 (Cache) + L2 (Foglio)
-// ══════════════════════════════════════════════════════════════
-// L1: Controlla in CacheService (2ms, TTL 2h).
-// L2: Se L1 miss, scansiona la colonna event_id di Timeline.
-// Se l'UUID esiste già → duplicato → rifiuta silenziosamente.
-
-/**
- * Verifica se un event_id è già stato processato.
- * @param {Cache} cache
- * @param {Sheet} timelineSheet - Foglio Timeline
- * @param {string} eventId - UUID da verificare
- * @returns {boolean} true se duplicato
- */
-function isEventDuplicate(cache, timelineSheet, eventId) {
-  if (!eventId) return false;
-  
-  // L1: Cache check (velocissimo, ~2ms)
-  var cacheKey = 'idem_' + eventId;
-  if (cache.get(cacheKey)) {
-    debugLog('Idempotenza L1 HIT', eventId);
-    return true;
-  }
-  
-  // L2: TextFinder (nativo GAS, ordini di grandezza più veloce di getValues)
-  // Cerca l'event_id nella colonna A (event_id) con match esatto sulla cella intera
-  var lastRow = timelineSheet.getLastRow();
-  if (lastRow <= 1) return false; // Solo header
-  
-  var finder = timelineSheet.getRange('A:A')
-    .createTextFinder(String(eventId))
-    .matchEntireCell(true)
-    .matchCase(true);
-  var found = finder.findNext();
-  
-  if (found) {
-    // Trovato nel foglio ma non in cache → ripopola cache L1
-    cache.put(cacheKey, '1', IDEM_CACHE_TTL);
-    debugLog('Idempotenza L2 HIT (TextFinder)', eventId);
-    return true;
-  }
-  
-  return false;
-}
-
-/**
- * Registra un event_id come processato nella cache L1.
- * @param {Cache} cache
- * @param {string} eventId
- */
-function markEventProcessed(cache, eventId) {
-  if (eventId) {
-    cache.put('idem_' + eventId, '1', IDEM_CACHE_TTL);
-  }
-}
-
-
-// ══════════════════════════════════════════════════════════════
-// FOGLIO: Lettura righe come array di oggetti
-// ══════════════════════════════════════════════════════════════
-
-/**
- * Legge tutte le righe di un foglio e le restituisce come
- * array di oggetti { header1: val1, header2: val2, ... }.
- * @param {Sheet} sheet
- * @returns {Object[]}
- */
-function readSheetAsObjects(sheet) {
-  var lastRow = sheet.getLastRow();
-  var lastCol = sheet.getLastColumn();
-  if (lastRow <= 1 || lastCol === 0) return [];
-  
-  var data = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
-  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-  
-  var result = [];
-  for (var r = 0; r < data.length; r++) {
-    var row = data[r];
-    // Salta righe completamente vuote
-    var isEmpty = true;
-    for (var c = 0; c < row.length; c++) {
-      if (row[c] !== '' && row[c] !== null && row[c] !== undefined) {
-        isEmpty = false;
-        break;
-      }
-    }
-    if (isEmpty) continue;
-    
-    var obj = {};
-    for (var c = 0; c < headers.length; c++) {
-      var h = String(headers[c]).trim();
-      if (h) obj[h] = row[c];
-    }
-    result.push(obj);
-  }
-  return result;
-}
-
-
-// ══════════════════════════════════════════════════════════════
-// FOGLIO: Scrittura con Schema Rigido (Whitelist)
-// ══════════════════════════════════════════════════════════════
-
-/**
- * Scrive una riga nel foglio usando SOLO le colonne definite
- * nello schema. I campi extra nel payload vengono IGNORATI.
- * I campi mancanti vengono scritti come stringa vuota.
- * 
- * NON crea MAI nuove colonne.
- * 
- * @param {Sheet} sheet - Il foglio di destinazione
- * @param {string} sheetName - Nome del foglio (per lookup in SCHEMAS)
- * @param {Object} data - Payload con i dati da scrivere
- */
-function writeRowStrict(sheet, sheetName, data) {
-  var schema = SCHEMAS[sheetName];
-  if (!schema) throw new Error('Schema non trovato per foglio: ' + sheetName);
-  
-  var row = [];
-  for (var i = 0; i < schema.length; i++) {
-    var key = schema[i];
-    var val = data.hasOwnProperty(key) ? data[key] : '';
-    if (val === undefined || val === null) val = '';
-    row.push(sanitizeValue(val));
-  }
-  
-  sheet.appendRow(row);
-}
-
-
-// ══════════════════════════════════════════════════════════════
-// FOGLIO: UPSERT per Entità (Colonie, Clienti, Cessioni)
-// ══════════════════════════════════════════════════════════════
-// Cerca la riga con lo stesso `id`. Se la trova, la aggiorna
-// in-place. Se non la trova, inserisce una nuova riga.
-
-/**
- * Aggiorna o inserisce un'entità nel foglio.
- * @param {Sheet} sheet
- * @param {string} sheetName - Nome foglio per lookup schema
- * @param {Object} data - Payload con i dati
- * @param {string} matchField - Campo da usare come chiave (default: 'id')
- */
-function upsertRow(sheet, sheetName, data, matchField) {
-  matchField = matchField || 'id';
-  var schema = SCHEMAS[sheetName];
-  if (!schema) throw new Error('Schema non trovato per foglio: ' + sheetName);
-  
-  var matchValue = data[matchField];
-  if (matchValue === null || matchValue === undefined || matchValue === '') {
-    throw new Error('upsertRow: campo "' + matchField + '" mancante nel payload.');
-  }
-  
-  // Costruisci la riga secondo lo schema (con sanitizzazione)
-  var newRow = [];
-  for (var i = 0; i < schema.length; i++) {
-    var key = schema[i];
-    var val = data.hasOwnProperty(key) ? data[key] : '';
-    if (val === undefined || val === null) val = '';
-    newRow.push(sanitizeValue(val));
-  }
-  
-  // Cerca riga esistente
-  var matchCol = schema.indexOf(matchField) + 1; // 1-indexed per Sheets
-  if (matchCol === 0) throw new Error('Campo "' + matchField + '" non trovato nello schema di ' + sheetName);
-  
-  var lastRow = sheet.getLastRow();
-  if (lastRow > 1) {
-    var ids = sheet.getRange(2, matchCol, lastRow - 1, 1).getValues();
-    for (var r = 0; r < ids.length; r++) {
-      if (String(ids[r][0]) === String(matchValue)) {
-        // Trovato → aggiorna in-place
-        sheet.getRange(r + 2, 1, 1, newRow.length).setValues([newRow]);
-        return 'updated';
-      }
-    }
-  }
-  
-  // Non trovato → inserisci nuova riga
-  sheet.appendRow(newRow);
-  return 'inserted';
-}
-
-
-// ══════════════════════════════════════════════════════════════
-// FOGLIO: SOFT DELETE per Entità (per id)
-// ══════════════════════════════════════════════════════════════
-// NON elimina fisicamente la riga. Imposta is_deleted = TRUE.
-// I dati restano nel foglio per audit/ripristino manuale.
-// Il doGet filtra automaticamente le righe con is_deleted.
-
-/**
- * Soft-delete: imposta is_deleted = TRUE per tutte le righe con un determinato id.
- * @param {Sheet} sheet
- * @param {string} sheetName - Nome foglio per lookup schema
- * @param {*} id - Valore dell'id da cercare
- * @returns {number} Numero di righe "eliminate" (soft)
- */
-function softDeleteById(sheet, sheetName, id) {
-  var schema = SCHEMAS[sheetName];
-  if (!schema) throw new Error('Schema non trovato per foglio: ' + sheetName);
-  
-  var idCol = schema.indexOf('id') + 1;
-  if (idCol === 0) throw new Error('Il foglio ' + sheetName + ' non ha una colonna "id".');
-  
-  var deletedCol = schema.indexOf('is_deleted') + 1;
-  if (deletedCol === 0) throw new Error('Il foglio ' + sheetName + ' non ha una colonna "is_deleted".');
-  
-  var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return 0;
-  
-  var ids = sheet.getRange(2, idCol, lastRow - 1, 1).getValues();
-  var deletedCount = 0;
-  
-  for (var r = 0; r < ids.length; r++) {
-    if (String(ids[r][0]) === String(id)) {
-      sheet.getRange(r + 2, deletedCol).setValue('TRUE');
-      deletedCount++;
-    }
-  }
-  
-  return deletedCount;
-}
-
-
-// ══════════════════════════════════════════════════════════════
-// UTILITY: Init Header di un foglio
-// ══════════════════════════════════════════════════════════════
-
-/**
- * Se un foglio è vuoto, scrive gli header dalla whitelist SCHEMAS.
- * Se ha già header, non li tocca.
- * @param {Spreadsheet} ss
- * @param {string} sheetName
- */
 function ensureHeaders(ss, sheetName) {
   var schema = SCHEMAS[sheetName];
   if (!schema) return;
   
   var sheet = ss.getSheetByName(sheetName);
   if (!sheet) {
-    // Crea il foglio se non esiste
     sheet = ss.insertSheet(sheetName);
   }
   
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(schema);
-    // Formatta header
+    // Formatta l'intestazione in stile Okopipi (sfondo nero, testo bianco bold)
     var headerRange = sheet.getRange(1, 1, 1, schema.length);
     headerRange.setFontWeight('bold');
-    headerRange.setBackground('#1a1a2e');
-    headerRange.setFontColor('#e0e0e0');
+    headerRange.setBackground('#000000');
+    headerRange.setFontColor('#ffffff');
     sheet.setFrozenRows(1);
   }
 }
 
-
-// ══════════════════════════════════════════════════════════════
-// UTILITY: Inizializza tutti i fogli (eseguire una volta)
-// ══════════════════════════════════════════════════════════════
-
-/**
- * Funzione da eseguire manualmente UNA VOLTA per creare
- * tutti i fogli con i loro header corretti.
- */
-function initAllSheets() {
-  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  var names = Object.keys(SHEET_NAMES);
-  for (var i = 0; i < names.length; i++) {
-    ensureHeaders(ss, SHEET_NAMES[names[i]]);
-  }
-  // Il foglio Termoigrometri viene aggiunto automaticamente grazie
-  // all'entry in SHEET_NAMES + SCHEMAS. initAllSheets() è sufficiente.
-  debugLog('initAllSheets', 'Tutti i fogli inizializzati (incluso Termoigrometri).');
+// Inizializza i fogli (può essere eseguita manualmente dal menu Apps Script)
+function initSheets() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ensureHeaders(ss, SHEET_NAMES.DATI);
+  ensureHeaders(ss, SHEET_NAMES.SENSORI);
+  Logger.log('Inizializzazione completata. Fogli creati con successo.');
 }
 
-
 // ══════════════════════════════════════════════════════════════
-// BACKUP NOTTURNO
+// ENDPOINT: doGet (Fornisce i dati alla pagina web)
 // ══════════════════════════════════════════════════════════════
-// Eseguire con trigger giornaliero (03:00-04:00).
-// Crea una copia del foglio in una cartella Drive dedicata.
-// Mantiene al massimo 30 backup, eliminando i più vecchi.
-
-function createNightlyBackup() {
-  try {
-    var file = DriveApp.getFileById(SPREADSHEET_ID);
-    var folderName = 'DUBIA_Backups';
-    var folders = DriveApp.getFoldersByName(folderName);
-    var folder;
-    
-    if (folders.hasNext()) {
-      folder = folders.next();
-    } else {
-      folder = DriveApp.createFolder(folderName);
-    }
-    
-    var backupName = 'DUBIA_Backup_' + Utilities.formatDate(new Date(), 'Europe/Rome', 'yyyy-MM-dd_HH-mm');
-    file.makeCopy(backupName, folder);
-    
-    // Rotazione: mantieni solo gli ultimi 30 backup
-    var files = folder.getFiles();
-    var allFiles = [];
-    while (files.hasNext()) {
-      var f = files.next();
-      allFiles.push({ file: f, date: f.getDateCreated() });
-    }
-    
-    if (allFiles.length > 30) {
-      allFiles.sort(function(a, b) { return a.date - b.date; });
-      var toDelete = allFiles.length - 30;
-      for (var i = 0; i < toDelete; i++) {
-        allFiles[i].file.setTrashed(true);
-      }
-    }
-    
-    debugLog('createNightlyBackup', 'Backup creato: ' + backupName);
-  } catch (e) {
-    debugLog('createNightlyBackup ERROR', e.toString());
-  }
-}
-
-
-// ══════════════════════════════════════════════════════════════
-// ENDPOINT: doGet
-// ══════════════════════════════════════════════════════════════
-// Parametro: ?sheet=NomeFoglio
-// Restituisce tutti i dati del foglio come array di oggetti.
-// Usa CacheService con chunking per performance.
-//
-// Risposta: { status: 'success', sheet: '...', count: N, data: [...] }
-
 function doGet(e) {
   try {
-    var sheetName = (e && e.parameter && e.parameter.sheet)
-      ? String(e.parameter.sheet).trim()
-      : 'Timeline';
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensureHeaders(ss, SHEET_NAMES.DATI);
+    ensureHeaders(ss, SHEET_NAMES.SENSORI);
     
-    // Parametro opzionale: ?last_sync=<timestamp_ms>
-    // Se presente, restituisce solo i record con 'date' >= last_sync
-    var lastSync = (e && e.parameter && e.parameter.last_sync)
-      ? parseInt(e.parameter.last_sync, 10)
-      : 0;
+    var datiSheet = ss.getSheetByName(SHEET_NAMES.DATI);
+    var sensoriSheet = ss.getSheetByName(SHEET_NAMES.SENSORI);
     
-    // Validazione: il foglio deve esistere nello schema
-    if (!SCHEMAS[sheetName]) {
-      return buildJsonResponse({
-        status: 'error',
-        message: 'Foglio "' + sheetName + '" non previsto nello schema.'
-      });
-    }
+    // Leggi l'anagrafica dei sensori per mapparli nel JSON
+    var sensoriMappa = {};
     
-    // Controlla cache (solo se non c'è last_sync, altrimenti serve il dato fresco)
-    var cache = CacheService.getScriptCache();
-    var cacheKey = 'sheet_' + sheetName;
-    if (!lastSync) {
-      var cached = cacheGet(cache, cacheKey);
-      if (cached) {
-        debugLog('doGet CACHE HIT', sheetName);
-        return buildJsonResponse(cached);
+    // Aggiungi SEMPRE il sensore fittizio/demo per consentire il test dell'interfaccia
+    var demoId = 'DEMO_SENSOR_01';
+    sensoriMappa[demoId] = 'Terrario Demo (Fittizio)';
+    
+    if (sensoriSheet.getLastRow() > 1) {
+      var sensoriDati = sensoriSheet.getRange(2, 1, sensoriSheet.getLastRow() - 1, 2).getValues();
+      for (var s = 0; s < sensoriDati.length; s++) {
+        var devId = String(sensoriDati[s][0]).trim();
+        var nome = String(sensoriDati[s][1]).trim();
+        if (devId) {
+          sensoriMappa[devId] = nome || devId;
+        }
       }
     }
     
-    // Cache miss o sync incrementale → leggi dal foglio
-    debugLog('doGet CACHE MISS', { sheet: sheetName, lastSync: lastSync });
-    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-    var sheet = ss.getSheetByName(sheetName);
+    // Parametro per il filtro temporale: ?range=24h, 7d, 30d, all
+    var range = (e && e.parameter && e.parameter.range) ? String(e.parameter.range).trim() : '7d';
     
-    if (!sheet) {
-      return buildJsonResponse({
-        status: 'success',
-        sheet: sheetName,
-        count: 0,
-        data: []
-      });
+    var limitMs = 0;
+    var now = Date.now();
+    if (range === '24h') {
+      limitMs = now - (24 * 60 * 60 * 1000);
+    } else if (range === '7d') {
+      limitMs = now - (7 * 24 * 60 * 60 * 1000);
+    } else if (range === '30d') {
+      limitMs = now - (30 * 24 * 60 * 60 * 1000);
+    } // 'all' mantiene limitMs = 0
+    
+    var risultati = [];
+    
+    // Genera dati fittizi/demo dinamici per il sensore fittizio (disattivato per testare solo i dati reali inviati dall'ESP)
+    /*
+    var mockData = generateMockData(range, now);
+    for (var m = 0; m < mockData.length; m++) {
+      risultati.push(mockData[m]);
+    }
+    */
+    
+    if (datiSheet.getLastRow() > 1) {
+      var headers = datiSheet.getRange(1, 1, 1, 4).getValues()[0];
+      var rawValues = datiSheet.getRange(2, 1, datiSheet.getLastRow() - 1, 4).getValues();
+      
+      for (var r = 0; r < rawValues.length; r++) {
+        var row = rawValues[r];
+        var timestampStr = row[0];
+        var deviceId = String(row[1]).trim();
+        var temperature = parseFloat(row[2]);
+        var humidity = parseFloat(row[3]);
+        
+        // Calcola millisecondi del timestamp
+        var timestampMs = 0;
+        if (timestampStr instanceof Date) {
+          timestampMs = timestampStr.getTime();
+        } else {
+          timestampMs = Date.parse(timestampStr);
+        }
+        
+        // Applica il filtro temporale
+        if (limitMs > 0 && timestampMs < limitMs) {
+          continue;
+        }
+        
+        // Formatta la data in ISO
+        var dateObj = new Date(timestampMs);
+        var isoString = Utilities.formatDate(dateObj, "Europe/Rome", "yyyy-MM-dd'T'HH:mm:ss");
+        
+        risultati.push({
+          timestamp: isoString,
+          device_id: deviceId,
+          sensor_name: sensoriMappa[deviceId] || deviceId,
+          temperature: isNaN(temperature) ? null : temperature,
+          humidity: isNaN(humidity) ? null : humidity
+        });
+      }
     }
     
-    var data = readSheetAsObjects(sheet);
+    // Ordina i dati cronologicamente
+    risultati.sort(function(a, b) {
+      return Date.parse(a.timestamp) - Date.parse(b.timestamp);
+    });
     
-    // ── Filtro Soft Delete: nascondi righe con is_deleted = TRUE ──
-    var schema = SCHEMAS[sheetName];
-    if (schema.indexOf('is_deleted') >= 0) {
-      data = data.filter(function(row) {
-        return String(row.is_deleted).toUpperCase() !== 'TRUE';
-      });
-    }
-    
-    // ── Filtro Sync Incrementale: solo record dopo last_sync ──
-    if (lastSync > 0) {
-      var syncDate = new Date(lastSync);
-      data = data.filter(function(row) {
-        var rowDate = row.date ? new Date(row.date) : null;
-        return rowDate && rowDate >= syncDate;
-      });
-    }
-    
-    var response = {
+    return buildJsonResponse({
       status: 'success',
-      sheet: sheetName,
-      count: data.length,
-      data: data,
-      server_time: Date.now()  // Il frontend può salvarlo come prossimo last_sync
-    };
-    
-    // Salva in cache solo il dataset completo (non quello incrementale)
-    if (!lastSync) {
-      cacheSet(cache, cacheKey, response);
-    }
-    
-    return buildJsonResponse(response);
+      range: range,
+      count: risultati.length,
+      sensors: sensoriMappa,
+      data: risultati
+    });
     
   } catch (err) {
-    debugLog('doGet ERROR', err.toString());
-    return buildJsonResponse({ status: 'error', message: err.toString() });
+    return buildJsonResponse({
+      status: 'error',
+      message: err.toString()
+    });
   }
 }
 
-
-// ══════════════════════════════════════════════════════════════
-// ENDPOINT: doPost
-// ══════════════════════════════════════════════════════════════
-//
-// Routing per event_type:
-//
-//   EVENTI TIMELINE (scritti nel foglio Timeline):
-//   ├── pesata         → Timeline
-//   ├── cibo           → Timeline
-//   ├── prelievo       → Timeline + aggiorna Colonie.current_weight
-//   ├── calibrazione   → Timeline
-//   └── nuovo_sangue   → Timeline
-//
-//   ENTITÀ CRUD:
-//   ├── colonia_sync   → UPSERT Colonie
-//   ├── colonia_delete → DELETE Colonie
-//   ├── cliente_sync   → UPSERT Clienti
-//   ├── cliente_delete → DELETE Clienti
-//   ├── cessione_sync  → UPSERT Cessioni
-//   └── cessione_delete→ DELETE Cessioni
-//
-
-function doPost(e) {
-  var risposta = { status: 'error', message: 'Richiesta non valida.' };
+// Generatore di dati fittizi realistici ad andamento sinusoidale
+function generateMockData(range, now) {
+  var mock = [];
+  var count = 24;
+  var intervalMs = 60 * 60 * 1000; // 1 ora
   
-  // ── LockService: serializza scritture simultanee ─────────────
+  if (range === '24h') {
+    count = 24;
+    intervalMs = 60 * 60 * 1000;
+  } else if (range === '7d') {
+    count = 42;
+    intervalMs = 4 * 60 * 60 * 1000;
+  } else if (range === '30d' || range === 'all') {
+    count = 60;
+    intervalMs = 12 * 60 * 60 * 1000;
+  }
+  
+  var baseTemp = 24.5;
+  var baseHum = 65.0;
+  
+  for (var i = 0; i < count; i++) {
+    var timeMs = now - (count - 1 - i) * intervalMs;
+    var dateObj = new Date(timeMs);
+    
+    var hour = dateObj.getHours();
+    // Picco di temperatura intorno alle 15:00, minimo alle 04:00
+    var rad = (hour - 4) * (2 * Math.PI / 24);
+    var tempOsc = Math.sin(rad) * 3.5;  // variazione +/- 3.5 °C
+    var humOsc = -Math.sin(rad) * 12.0; // umidità speculare alla temp +/- 12%
+    
+    // Aggiungi un piccolo disturbo casuale per renderlo reale
+    var noiseTemp = (Math.random() - 0.5) * 0.8;
+    var noiseHum = (Math.random() - 0.5) * 3.0;
+    
+    var temp = baseTemp + tempOsc + noiseTemp;
+    var hum = baseHum + humOsc + noiseHum;
+    
+    if (hum > 100) hum = 100;
+    if (hum < 0) hum = 0;
+    
+    var isoString = Utilities.formatDate(dateObj, "Europe/Rome", "yyyy-MM-dd'T'HH:mm:ss");
+    
+    mock.push({
+      timestamp: isoString,
+      device_id: 'DEMO_SENSOR_01',
+      sensor_name: 'Terrario Demo (Fittizio)',
+      temperature: parseFloat(temp.toFixed(1)),
+      humidity: parseFloat(hum.toFixed(1))
+    });
+  }
+  return mock;
+}
+
+// ══════════════════════════════════════════════════════════════
+// ENDPOINT: doPost (Riceve le letture dall'ESP8266)
+// ══════════════════════════════════════════════════════════════
+function doPost(e) {
   var lock = LockService.getScriptLock();
   try {
-    lock.waitLock(30000); // max 30s in coda (margine per picchi di latenza GAS)
+    // Attendi fino a 15 secondi per serializzare le scritture ed evitare conflitti
+    lock.waitLock(15000);
   } catch (lockErr) {
     return buildJsonResponse({
       status: 'error',
-      message: 'Server temporaneamente occupato. Riprova tra qualche secondo.'
+      message: 'Server occupato. Riprova più tardi.'
     });
   }
   
   try {
-    // ── Parsing payload ─────────────────────────────────────────
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensureHeaders(ss, SHEET_NAMES.DATI);
+    ensureHeaders(ss, SHEET_NAMES.SENSORI);
+    
+    var datiSheet = ss.getSheetByName(SHEET_NAMES.DATI);
+    var sensoriSheet = ss.getSheetByName(SHEET_NAMES.SENSORI);
+    
     if (!e || !e.postData || !e.postData.contents) {
-      throw new Error('Nessun dato ricevuto nel body della richiesta POST.');
+      throw new Error('Nessun dato ricevuto nel body del POST.');
     }
     
-    var dati;
-    try {
-      dati = JSON.parse(e.postData.contents);
-    } catch (parseErr) {
-      throw new Error('JSON non valido: ' + parseErr.toString());
-    }
+    var contents = e.postData.contents;
+    var contentType = e.postData.type || '';
     
-    // ── Validazione event_type ──────────────────────────────────
-    var eventType = String(dati.event_type || '').trim();
-    if (!eventType || !VALID_EVENT_TYPES[eventType]) {
-      throw new Error('event_type non riconosciuto: "' + eventType + '"');
-    }
+    var deviceId = 'unknown';
+    var readings = [];
     
-    var action = VALID_EVENT_TYPES[eventType];
-    var eventId = dati.event_id || null;
-    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-    var cache = CacheService.getScriptCache();
-    
-    debugLog('doPost', { eventType: eventType, eventId: eventId, action: action });
-    
-    // ════════════════════════════════════════════════════════════
-    // ROUTE: entity_delete (colonia_delete, cliente_delete, cessione_delete)
-    // ════════════════════════════════════════════════════════════
-    if (action === 'entity_delete') {
-      var delId = dati.id;
-      if (delId === null || delId === undefined) {
-        throw new Error(eventType + ' richiede il campo "id".');
-      }
+    // 1. DETERMINAZIONE DEL FORMATO (JSON o CSV)
+    if (contentType.indexOf('application/json') >= 0 || contents.trim().startsWith('{')) {
+      // Formato JSON (es. inoltro da server proxy Vercel o webhook)
+      var datiJson = JSON.parse(contents);
+      deviceId = datiJson.device_id || deviceId;
       
-      var targetSheetName;
-      if (eventType === 'colonia_delete')  targetSheetName = SHEET_NAMES.COLONIE;
-      if (eventType === 'cliente_delete')  targetSheetName = SHEET_NAMES.CLIENTI;
-      if (eventType === 'cessione_delete') targetSheetName = SHEET_NAMES.CESSIONI;
-      if (eventType === 'sensore_delete')  targetSheetName = SHEET_NAMES.SENSORI;
-      
-      var sheet = ss.getSheetByName(targetSheetName);
-      var n = 0;
-      if (sheet) {
-        n = softDeleteById(sheet, targetSheetName, delId);
-      }
-      
-      // Invalida cache del foglio
-      cacheInvalidate(cache, 'sheet_' + targetSheetName);
-      
-      risposta = {
-        status: 'success',
-        message: eventType + ': id=' + delId + ' eliminato (' + n + ' righe).'
-      };
-      return buildJsonResponse(risposta);
-    }
-    
-    // ════════════════════════════════════════════════════════════
-    // ROUTE: entity_upsert (colonia_sync, cliente_sync, cessione_sync)
-    // ════════════════════════════════════════════════════════════
-    if (action === 'entity_upsert') {
-      var targetSheetName;
-      if (eventType === 'colonia_sync')  targetSheetName = SHEET_NAMES.COLONIE;
-      if (eventType === 'cliente_sync')  targetSheetName = SHEET_NAMES.CLIENTI;
-      if (eventType === 'cessione_sync') targetSheetName = SHEET_NAMES.CESSIONI;
-      if (eventType === 'sensore_sync')   targetSheetName = SHEET_NAMES.SENSORI;
-      
-      var sheet = ss.getSheetByName(targetSheetName);
-      if (!sheet) {
-        // Auto-crea il foglio con header se non esiste
-        ensureHeaders(ss, targetSheetName);
-        sheet = ss.getSheetByName(targetSheetName);
-      }
-      
-      var result = upsertRow(sheet, targetSheetName, dati, 'id');
-      
-      // Invalida cache del foglio
-      cacheInvalidate(cache, 'sheet_' + targetSheetName);
-      
-      risposta = {
-        status: 'success',
-        message: eventType + ': id=' + dati.id + ' ' + result + '.'
-      };
-      return buildJsonResponse(risposta);
-    }
-    
-    // ════════════════════════════════════════════════════════════
-    // ROUTE: timeline (pesata, cibo, prelievo, calibrazione, nuovo_sangue)
-    // ════════════════════════════════════════════════════════════
-    if (action === 'timeline') {
-      var timelineSheet = ss.getSheetByName(SHEET_NAMES.TIMELINE);
-      if (!timelineSheet) {
-        ensureHeaders(ss, SHEET_NAMES.TIMELINE);
-        timelineSheet = ss.getSheetByName(SHEET_NAMES.TIMELINE);
-      }
-      
-      // ── Idempotenza L1+L2 ───────────────────────────────────
-      if (eventId && isEventDuplicate(cache, timelineSheet, eventId)) {
-        debugLog('doPost — duplicato ignorato', eventId);
-        risposta = {
-          status: 'success',
-          message: 'Evento già registrato (duplicato ignorato).',
-          duplicate: true
-        };
-        return buildJsonResponse(risposta);
-      }
-      
-      // ── Scrivi nella Timeline con schema rigido ─────────────
-      writeRowStrict(timelineSheet, SHEET_NAMES.TIMELINE, dati);
-      var insertedRow = timelineSheet.getLastRow(); // Riga appena inserita (per rollback)
-      
-      // ── Registra event_id come processato (L1) ─────────────
-      markEventProcessed(cache, eventId);
-      
-      // ── Invalida SOLO la cache Timeline ─────────────────────
-      cacheInvalidate(cache, 'sheet_' + SHEET_NAMES.TIMELINE);
-      
-      // ── Pseudo-Transazione: prelievo → aggiorna Colonie ────
-      // Se è un prelievo con colony_id, aggiorna il current_weight
-      // della colonia corrispondente. Se FALLISCE → ROLLBACK:
-      // cancella la riga Timeline appena inserita e restituisce errore.
-      if (eventType === 'prelievo' && dati.colony_id && dati.colony_weight_after !== undefined) {
-        try {
-          var colonieSheet = ss.getSheetByName(SHEET_NAMES.COLONIE);
-          if (!colonieSheet) throw new Error('Foglio Colonie non trovato.');
-          
-          // Usa TextFinder per trovare la colonia velocemente
-          var schema = SCHEMAS[SHEET_NAMES.COLONIE];
-          var idCol = schema.indexOf('id') + 1;
-          var weightCol = schema.indexOf('current_weight') + 1;
-          
-          if (idCol <= 0 || weightCol <= 0) throw new Error('Schema Colonie corrotto.');
-          
-          var finder = colonieSheet.getRange(2, idCol, Math.max(1, colonieSheet.getLastRow() - 1), 1)
-            .createTextFinder(String(dati.colony_id))
-            .matchEntireCell(true);
-          var found = finder.findNext();
-          
-          if (!found) {
-            debugLog('prelievo WARNING', 'colony_id=' + dati.colony_id + ' non trovata nel foglio Colonie. Evento Timeline registrato senza aggiornamento peso colonia.');
-            // NON rollback: la pesata globale è valida, semplicemente la colonia non esiste nel cloud
-          } else {
-            colonieSheet.getRange(found.getRow(), weightCol).setValue(dati.colony_weight_after);
-            // Invalida SOLO la cache Colonie (non Timeline, già invalidata sopra)
-            cacheInvalidate(cache, 'sheet_' + SHEET_NAMES.COLONIE);
-          }
-        } catch (txErr) {
-          // ── ROLLBACK: cancella la riga Timeline appena inserita ──
-          debugLog('ROLLBACK prelievo', txErr.toString());
-          try {
-            timelineSheet.deleteRow(insertedRow);
-            // Invalida di nuovo la cache Timeline (stato rollback)
-            cacheInvalidate(cache, 'sheet_' + SHEET_NAMES.TIMELINE);
-          } catch (rollbackErr) {
-            debugLog('ROLLBACK FAILED', rollbackErr.toString());
-          }
-          throw new Error('Prelievo fallito (rollback eseguito): ' + txErr.toString());
+      if (datiJson.readings && Array.isArray(datiJson.readings)) {
+        for (var i = 0; i < datiJson.readings.length; i++) {
+          var r = datiJson.readings[i];
+          readings.push({
+            t10: parseInt(r.t10, 10),
+            h10: parseInt(r.h10, 10)
+          });
         }
-      }
-      
-      risposta = {
-        status: 'success',
-        message: 'Evento "' + eventType + '" registrato in Timeline.',
-        event_id: eventId
-      };
-      return buildJsonResponse(risposta);
-    }
-    
-    // ════════════════════════════════════════════════════════════
-    // ROUTE: termoigrometro (termoigrometro_data)
-    // ════════════════════════════════════════════════════════════
-    // Payload atteso:
-    //   {
-    //     event_type: 'termoigrometro_data',
-    //     device_id:  'AA:BB:CC:DD:EE:FF',   // MAC address ESP8266
-    //     readings:   [{t10: 255, h10: 650}, ...]  // batch letture (max 60)
-    //   }
-    // Ogni lettura viene scritta come riga separata nel foglio Termoigrometri.
-    // Il timestamp è generato server-side (GAS) per evitare deriva orologio ESP.
-    if (action === 'termoigrometro') {
-      var termoSheet = ss.getSheetByName(SHEET_NAMES.TERMOIGROMETRI);
-      if (!termoSheet) {
-        ensureHeaders(ss, SHEET_NAMES.TERMOIGROMETRI);
-        termoSheet = ss.getSheetByName(SHEET_NAMES.TERMOIGROMETRI);
-      }
-      
-      var deviceId = dati.device_id ? String(dati.device_id).trim() : 'unknown';
-      
-      // Auto-registrazione sensore se non presente nel foglio Sensori
-      if (deviceId !== 'unknown' && deviceId !== '') {
-        var sensoriSheet = ss.getSheetByName(SHEET_NAMES.SENSORI);
-        if (!sensoriSheet) {
-          ensureHeaders(ss, SHEET_NAMES.SENSORI);
-          sensoriSheet = ss.getSheetByName(SHEET_NAMES.SENSORI);
-        }
-        var sensoriData = readSheetAsObjects(sensoriSheet);
-        var exists = sensoriData.some(function(s) {
-          return String(s.id).toLowerCase() === deviceId.toLowerCase();
+      } else if (datiJson.t10 !== undefined && datiJson.h10 !== undefined) {
+        // Lettura singola diretta JSON
+        readings.push({
+          t10: parseInt(datiJson.t10, 10),
+          h10: parseInt(datiJson.h10, 10)
         });
-        if (!exists) {
-          var newSensor = {
-            id: deviceId,
-            nome: 'Nuovo Sensore (' + deviceId + ')',
-            is_deleted: 'FALSE'
-          };
-          writeRowStrict(sensoriSheet, SHEET_NAMES.SENSORI, newSensor);
-          cacheInvalidate(cache, 'sheet_' + SHEET_NAMES.SENSORI);
+      }
+    } else {
+      // Formato CSV (inviato direttamente dall'ESP8266)
+      // Esempio:
+      // 245,582
+      // 246,585
+      // Dal momento che GAS non legge gli header personalizzati (es. X-Device-ID),
+      // il deviceId deve essere passato come query parameter: ?device_id=MAC
+      if (e.parameter && e.parameter.device_id) {
+        deviceId = String(e.parameter.device_id).trim();
+      } else if (e.parameter && e.parameter.deviceId) {
+        deviceId = String(e.parameter.deviceId).trim();
+      }
+      
+      var lines = contents.split(/\r?\n/);
+      for (var l = 0; l < lines.length; l++) {
+        var line = lines[l].trim();
+        if (!line) continue;
+        var parts = line.split(',');
+        if (parts.length >= 2) {
+          var tVal = parseInt(parts[0], 10);
+          var hVal = parseInt(parts[1], 10);
+          if (!isNaN(tVal) && !isNaN(hVal)) {
+            readings.push({ t10: tVal, h10: hVal });
+          }
         }
       }
-      
-      var readings = dati.readings;
-      var interval = dati.interval ? parseInt(dati.interval, 10) : 60; // in secondi
-      
-      if (!readings || !Array.isArray(readings) || readings.length === 0) {
-        throw new Error('termoigrometro_data: campo "readings" mancante o vuoto.');
-      }
-      
-      // Calcola un timestamp base: ora del server GAS.
-      // Le letture sono spaziate di interval secondi (SLEEP_US del firmware).
-      // Distribuiamo i timestamp a ritroso: l'ultima lettura = adesso,
-      // la prima = adesso - (N-1) * interval.
-      var nowMs = Date.now();
-      var INTERVAL_MS = interval * 1000; // in millisecondi
-      var n = readings.length;
-      
-      var schema = SCHEMAS[SHEET_NAMES.TERMOIGROMETRI];
-      var batchRows = [];
-      
-      for (var i = 0; i < n; i++) {
-        var r = readings[i];
-        var t10 = typeof r.t10 === 'number' ? r.t10 : parseInt(r.t10, 10);
-        var h10 = typeof r.h10 === 'number' ? r.h10 : parseInt(r.h10, 10);
-        
-        // Sanity check range (identico a quello del firmware)
-        if (isNaN(t10) || isNaN(h10)) continue;
-        var tempC  = t10 / 10.0;
-        var humPct = h10 / 10.0;
-        if (tempC < -40 || tempC > 125 || humPct < 0 || humPct > 100) continue;
-        
-        // Timestamp distribuito: i=0 → il più vecchio, i=n-1 → il più recente
-        var readingMs = nowMs - (n - 1 - i) * INTERVAL_MS;
-        var readingIso = Utilities.formatDate(
-          new Date(readingMs),
-          'Europe/Rome',
-          "yyyy-MM-dd'T'HH:mm:ss"
-        );
-        
-        var row = [];
-        for (var c = 0; c < schema.length; c++) {
-          var key = schema[c];
-          if      (key === 'timestamp')   row.push(readingIso);
-          else if (key === 'device_id')   row.push(deviceId);
-          else if (key === 'temperature') row.push(tempC);
-          else if (key === 'humidity')    row.push(humPct);
-          else row.push('');
-        }
-        batchRows.push(row);
-      }
-      
-      if (batchRows.length === 0) {
-        throw new Error('termoigrometro_data: nessuna lettura valida nel batch.');
-      }
-      
-      // Scrittura batch (molto più veloce di appendRow singolo)
-      var startRow = termoSheet.getLastRow() + 1;
-      termoSheet.getRange(startRow, 1, batchRows.length, schema.length).setValues(batchRows);
-      
-      // Invalida cache del foglio Termoigrometri
-      cacheInvalidate(cache, 'sheet_' + SHEET_NAMES.TERMOIGROMETRI);
-      
-      debugLog('termoigrometro_data', {
-        device: deviceId,
-        written: batchRows.length,
-        discarded: readings.length - batchRows.length
-      });
-      
-      risposta = {
-        status: 'success',
-        message: 'Batch termoigrometro: ' + batchRows.length + ' letture scritte (' +
-                 (readings.length - batchRows.length) + ' scartate per range non valido).',
-        device_id: deviceId,
-        written: batchRows.length
-      };
-      return buildJsonResponse(risposta);
     }
     
-    // Fallthrough (non dovrebbe mai arrivarci grazie alla validazione)
-    throw new Error('Routing non gestito per event_type: ' + eventType);
+    if (readings.length === 0) {
+      throw new Error('Nessuna lettura valida trovata nel payload.');
+    }
+    
+    // 2. AUTO-REGISTRAZIONE DEL SENSORE NELL'ANAGRAFICA
+    if (deviceId !== 'unknown') {
+      var sensoriDati = sensoriSheet.getLastRow() > 1 
+        ? sensoriSheet.getRange(2, 1, sensoriSheet.getLastRow() - 1, 1).getValues().map(function(r) { return String(r[0]).trim().toLowerCase(); }) 
+        : [];
+      
+      if (sensoriDati.indexOf(deviceId.toLowerCase()) === -1) {
+        sensoriSheet.appendRow([
+          deviceId,
+          'Nuovo Terrario (' + deviceId + ')'
+        ]);
+      }
+    }
+    
+    // 3. GENERAZIONE TIMESTAMPS A RITROSO (60 secondi l'uno)
+    var nowMs = Date.now();
+    var INTERVAL_MS = 60 * 1000; // Intervallo standard di 60s
+    var totalReadings = readings.length;
+    var batchRows = [];
+    
+    for (var j = 0; j < totalReadings; j++) {
+      var reading = readings[j];
+      var tempC = reading.t10 / 10.0;
+      var humPct = reading.h10 / 10.0;
+      
+      // Controllo di validità dei sensori SHT40
+      if (tempC < -40 || tempC > 125 || humPct < 0 || humPct > 100) {
+        continue; // Scarta letture corrotte/fuori range
+      }
+      
+      // Calcola il timestamp relativo a ritroso
+      // i = 0 è il più vecchio (ora - (N-1)*60s), i = N-1 è il più recente (ora)
+      var readingMs = nowMs - (totalReadings - 1 - j) * INTERVAL_MS;
+      var readingIso = Utilities.formatDate(
+        new Date(readingMs),
+        "Europe/Rome",
+        "yyyy-MM-dd'T'HH:mm:ss"
+      );
+      
+      batchRows.push([
+        readingIso,
+        deviceId,
+        tempC,
+        humPct
+      ]);
+    }
+    
+    if (batchRows.length > 0) {
+      var startRow = datiSheet.getLastRow() + 1;
+      datiSheet.getRange(startRow, 1, batchRows.length, 4).setValues(batchRows);
+    }
+    
+    return buildJsonResponse({
+      status: 'success',
+      device_id: deviceId,
+      written: batchRows.length,
+      discarded: totalReadings - batchRows.length
+    });
     
   } catch (err) {
-    debugLog('doPost ERROR', err.toString());
-    
-    // ── Alerting Attivo: invia crash report via email ────────
-    if (ALERT_EMAIL) {
-      try {
-        var payloadPreview = '';
-        try { payloadPreview = e && e.postData ? e.postData.contents.substring(0, 500) : 'N/A'; } catch(x) {}
-        MailApp.sendEmail({
-          to: ALERT_EMAIL,
-          subject: '🚨 DUBIA CRASH REPORT - Errore Backend',
-          body: 'Errore durante doPost:\n\n'
-            + err.toString() + '\n\n'
-            + 'Stack: ' + (err.stack || 'N/A') + '\n\n'
-            + 'Payload (primi 500 char):\n' + payloadPreview + '\n\n'
-            + 'Timestamp: ' + new Date().toISOString()
-        });
-      } catch (mailErr) {
-        debugLog('ALERT EMAIL FAILED', mailErr.toString());
-      }
-    }
-    
-    risposta = { status: 'error', message: err.toString() };
-    return buildJsonResponse(risposta);
-    
+    return buildJsonResponse({
+      status: 'error',
+      message: err.toString()
+    });
   } finally {
-    // Rilascia il lock SEMPRE, anche in caso di errore
-    try { lock.releaseLock(); } catch (e) { /* silenzioso */ }
-  }
-}
-
-
-// ══════════════════════════════════════════════════════════════
-// MIGRAZIONE: Da DUBIOZZA (V2) a DUBIA_V3
-// ══════════════════════════════════════════════════════════════
-// Eseguire UNA SOLA VOLTA dall'editor GAS (▶️ Esegui).
-// Legge i dati dal vecchio foglio, li filtra attraverso lo
-// schema rigido V3, e li scrive nel nuovo foglio puliti.
-//
-// ⚠️ IMPORTANTE: aggiornare OLD_SPREADSHEET_ID prima di eseguire!
-
-/**
- * ID del VECCHIO foglio DUBIOZZA.
- * Ricavalo dall'URL del vecchio Google Sheet.
- */
-var OLD_SPREADSHEET_ID = '1mE5bpZaIhdFrjwhiJS_wsCfTEJ3PnAJuXm2RH80dSYg';
-
-/**
- * Mappa i nomi dei fogli del vecchio spreadsheet ai nomi V3.
- * Se il vecchio foglio ha un nome diverso, aggiornalo qui.
- */
-var MIGRATION_MAP = {
-  'Timeline':   'Timeline',
-  'Colonie':    'Colonie',
-  'Clienti':    'Clienti',
-  'Cessioni':   'Cessioni'
-};
-
-/**
- * Migra tutti i dati dal vecchio spreadsheet al nuovo.
- * Ogni riga viene passata attraverso lo schema rigido V3:
- * - I campi previsti vengono copiati
- * - I campi extra vengono ignorati
- * - I campi mancanti vengono riempiti con stringa vuota
- */
-function migrateFromV2() {
-  var oldSS, newSS;
-  
-  try {
-    oldSS = SpreadsheetApp.openById(OLD_SPREADSHEET_ID);
-  } catch (e) {
-    Logger.log('❌ Impossibile aprire il vecchio foglio: ' + e.toString());
-    Logger.log('   Controlla OLD_SPREADSHEET_ID: ' + OLD_SPREADSHEET_ID);
-    return;
-  }
-  
-  try {
-    newSS = SpreadsheetApp.openById(SPREADSHEET_ID);
-  } catch (e) {
-    Logger.log('❌ Impossibile aprire il nuovo foglio: ' + e.toString());
-    Logger.log('   Controlla SPREADSHEET_ID: ' + SPREADSHEET_ID);
-    return;
-  }
-  
-  var migrationKeys = Object.keys(MIGRATION_MAP);
-  var totalMigrated = 0;
-  var report = [];
-  
-  for (var m = 0; m < migrationKeys.length; m++) {
-    var oldName = migrationKeys[m];
-    var newName = MIGRATION_MAP[oldName];
-    var schema = SCHEMAS[newName];
-    
-    if (!schema) {
-      report.push('⚠️ Schema non trovato per: ' + newName + ' — saltato.');
-      continue;
-    }
-    
-    var oldSheet = oldSS.getSheetByName(oldName);
-    if (!oldSheet) {
-      report.push('⚠️ Foglio "' + oldName + '" non trovato nel vecchio spreadsheet — saltato.');
-      continue;
-    }
-    
-    // Assicurati che il foglio di destinazione esista con header
-    ensureHeaders(newSS, newName);
-    var newSheet = newSS.getSheetByName(newName);
-    
-    // Leggi dati dal vecchio foglio
-    var oldData = readSheetAsObjects(oldSheet);
-    if (oldData.length === 0) {
-      report.push('ℹ️ ' + oldName + ': 0 righe — niente da migrare.');
-      continue;
-    }
-    
-    // Costruisci le righe secondo lo schema rigido V3
-    var newRows = [];
-    for (var r = 0; r < oldData.length; r++) {
-      var oldRow = oldData[r];
-      var newRow = [];
-      
-      // ── REGOLE DI TRASFORMAZIONE SPECIALI PER IL VECCHIO FOGLIO ──
-      // Nel vecchio DUBIOZZA, l'evento si chiamava "id" anziché "event_id"
-      if (newName === 'Timeline' && !oldRow.hasOwnProperty('event_id') && oldRow.hasOwnProperty('id')) {
-        oldRow['event_id'] = oldRow['id'];
-      }
-      // Nel vecchio DUBIOZZA non c'era "event_type", assumiamo siano tutte pesate
-      if (newName === 'Timeline' && !oldRow.hasOwnProperty('event_type') && oldRow.hasOwnProperty('total_weight')) {
-        oldRow['event_type'] = 'pesata';
-      }
-      // I vecchi dati non hanno "is_deleted"
-      if (!oldRow.hasOwnProperty('is_deleted')) {
-        oldRow['is_deleted'] = 'FALSE';
-      }
-      
-      for (var c = 0; c < schema.length; c++) {
-        var key = schema[c];
-        var val = oldRow.hasOwnProperty(key) ? oldRow[key] : '';
-        if (val === undefined || val === null) val = '';
-        newRow.push(sanitizeValue(val));
-      }
-      
-      newRows.push(newRow);
-    }
-    
-    // Scrivi in blocco nel nuovo foglio (molto più veloce di appendRow singolo)
-    if (newRows.length > 0) {
-      var startRow = newSheet.getLastRow() + 1;
-      newSheet.getRange(startRow, 1, newRows.length, schema.length).setValues(newRows);
-    }
-    
-    totalMigrated += newRows.length;
-    report.push('✅ ' + newName + ': ' + newRows.length + ' righe migrate.');
-  }
-  
-  // Report finale
-  Logger.log('');
-  Logger.log('══════════════════════════════════════════');
-  Logger.log('  D.U.B.I.A. MIGRAZIONE V2 → V3 COMPLETATA');
-  Logger.log('══════════════════════════════════════════');
-  for (var i = 0; i < report.length; i++) {
-    Logger.log('  ' + report[i]);
-  }
-  Logger.log('──────────────────────────────────────────');
-  Logger.log('  Totale righe migrate: ' + totalMigrated);
-  Logger.log('══════════════════════════════════════════');
-  
-  // Invalida tutta la cache (i nuovi dati devono essere letti freschi)
-  var cache = CacheService.getScriptCache();
-  var sheetNames = Object.keys(SCHEMAS);
-  for (var s = 0; s < sheetNames.length; s++) {
-    cacheInvalidate(cache, 'sheet_' + sheetNames[s]);
+    lock.releaseLock();
   }
 }

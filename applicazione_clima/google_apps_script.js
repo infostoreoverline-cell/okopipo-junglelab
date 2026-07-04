@@ -117,11 +117,13 @@ function doGet(e) {
     
     var risultati = [];
     
-    // Genera dati fittizi/demo dinamici per il sensore fittizio
+    // Genera dati fittizi/demo dinamici per il sensore fittizio (disattivato per testare solo i dati reali inviati dall'ESP)
+    /*
     var mockData = generateMockData(range, now);
     for (var m = 0; m < mockData.length; m++) {
       risultati.push(mockData[m]);
     }
+    */
     
     if (datiSheet.getLastRow() > 1) {
       var headers = datiSheet.getRange(1, 1, 1, 4).getValues()[0];
