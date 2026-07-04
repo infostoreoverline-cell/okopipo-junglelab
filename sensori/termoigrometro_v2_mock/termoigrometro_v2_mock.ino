@@ -46,7 +46,7 @@
 // ─── §2  CONFIGURAZIONE ───────────────────────────────────────────────────────
 static const char WIFI_SSID[] PROGMEM = "ASUS";
 static const char WIFI_PASS[] PROGMEM = "24no1998";
-static const char HTTP_EP[]   PROGMEM = "https://dubia-flame.vercel.app/api/ingest";
+static const char HTTP_EP[]   PROGMEM = "https://okopipo-junglelab-vg32.vercel.app/api/ingest";
 static const char DATA_FILE[] PROGMEM = "/dati.txt";
 static const char CONFIG_FILE[] PROGMEM = "/config.txt";
 
