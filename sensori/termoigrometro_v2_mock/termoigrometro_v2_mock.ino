@@ -65,7 +65,7 @@ static constexpr uint8_t  SCREEN_H          = 64;
 
 // --- PARAMETRI DI PRODUZIONE (DATI MOCK) ---
 static constexpr uint64_t SLEEP_US          = 10ULL * 60ULL * 1000000ULL;  // 10 Minuti tra le letture
-static constexpr uint32_t READINGS_PER_SEND = 24;                           // Invia dopo 24 letture (ogni 4 ore)
+static constexpr uint32_t READINGS_PER_SEND = 6;                            // Invia dopo 6 letture (ogni ora)
 
 static constexpr uint32_t WIFI_TIMEOUT_MS   = 12000UL;
 static constexpr uint32_t FS_MAX_BYTES      = 65536UL;

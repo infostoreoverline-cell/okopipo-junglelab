@@ -63,10 +63,9 @@ static constexpr uint8_t  DISP_FALL         = 0x3D;
 static constexpr uint8_t  SCREEN_W          = 128;
 static constexpr uint8_t  SCREEN_H          = 64;
 
-// --- PARAMETRI DI TEST INFRASTRUTTURA VELOCE ---
-// Modifica qui i valori per simulare tempi di produzione (es. 10 minuti di sleep e 24 letture prima dell'invio)
-static constexpr uint64_t SLEEP_US          = 30ULL * 1000000ULL;  // 30 Secondi tra le letture (Originale: 10 Minuti = 10ULL * 60ULL * 1000000ULL)
-static constexpr uint32_t READINGS_PER_SEND = 3;                   // Invia dopo 3 letture (Originale: 24 misure = 4 ore)
+// --- PARAMETRI DI PRODUZIONE (DATI REALI) ---
+static constexpr uint64_t SLEEP_US          = 10ULL * 60ULL * 1000000ULL;  // 10 Minuti tra le letture
+static constexpr uint32_t READINGS_PER_SEND = 6;                            // Invia dopo 6 letture (ogni ora)
 
 static constexpr uint32_t WIFI_TIMEOUT_MS   = 12000UL;
 static constexpr uint32_t FS_MAX_BYTES      = 65536UL;
