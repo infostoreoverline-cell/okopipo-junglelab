@@ -12,6 +12,10 @@
 </head>
 <body>
 
+    <!-- GLOWS AMBIENTALI RESPIRANTI -->
+    <div class="ambient-glow ambient-glow-red"></div>
+    <div class="ambient-glow ambient-glow-blue"></div>
+
     <!-- CONTENITORE GENERALE -->
     <div class="app-container">
         
@@ -26,24 +30,65 @@
 
         <!-- SEZIONE CONFIGURAZIONE INIZIALE (Mostrata solo se manca la URL di Apps Script) -->
         <section id="setupGuide" class="setup-guide card">
-            <h3 class="card-title">CONFIGURAZIONE BACKEND</h3>
+            <div class="scan-line"></div>
+            <h3 class="card-title">COLLEGAMENTO CLOUD</h3>
             <p class="guide-text">
-                Per visualizzare i dati dei termoigrometri, incolla qui sotto la <strong>URL Web App</strong> generata distribuendo il codice Apps Script sul tuo Google Sheet.
+                Per attivare il monitoraggio dei terrari, inserisci qui sotto la chiave di connessione (URL Web App generata da Google Sheets).
             </p>
+            
             <div class="setup-form">
-                <input type="url" id="scriptUrlInput" placeholder="https://script.google.com/macros/s/..." class="input-square">
-                <button id="btnSaveUrl" class="btn-square">SALVA CONFIGURAZIONE</button>
+                <div class="input-wrapper">
+                    <input type="url" id="scriptUrlInput" placeholder="Incolla URL Web App (https://script.google.com/...)" class="input-square">
+                    <div id="setupFeedback" class="setup-feedback"></div>
+                </div>
+                <button id="btnSaveUrl" class="btn-square">CONNETTI ORA</button>
             </div>
-            <div class="guide-instructions">
-                <h4>Come ottenere la URL:</h4>
-                <ol>
-                    <li>Apri il tuo foglio Google.</li>
-                    <li>Vai su <strong>Estensioni</strong> &rarr; <strong>Apps Script</strong>.</li>
-                    <li>Copia il codice del file <code>google_apps_script.js</code> nell'editor.</li>
-                    <li>Fai clic su <strong>Distribuisci</strong> &rarr; <strong>Nuova distribuzione</strong>.</li>
-                    <li>Seleziona <strong>Applicazione web</strong>, imposta l'accesso su <strong>Chiunque</strong> e fai clic su <strong>Distribuisci</strong>.</li>
-                    <li>Copia l'URL fornito e incollalo qui sopra.</li>
-                </ol>
+
+            <!-- Guida interattiva collassabile (A prova di errore) -->
+            <div class="guide-accordion">
+                <button id="btnToggleGuide" class="btn-guide-toggle">GUIDA PASSO-PASSO AL COLLEGAMENTO <span class="toggle-icon">↓</span></button>
+                
+                <div id="guideSteps" class="guide-steps-container" style="max-height: 0px; overflow: hidden; opacity: 0; transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);">
+                    <div class="step-card">
+                        <div class="step-num">01</div>
+                        <div class="step-body">
+                            <h5>Apri il tuo Foglio Google</h5>
+                            <p>Crea un nuovo foglio o aprine uno esistente su Google Drive per registrare i dati.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="step-card">
+                        <div class="step-num">02</div>
+                        <div class="step-body">
+                            <h5>Copia il Codice Apps Script</h5>
+                            <p>Vai su <strong>Estensioni</strong> &rarr; <strong>Apps Script</strong>. Svuota l'editor e incolla il file <code>google_apps_script.js</code>.</p>
+                        </div>
+                    </div>
+
+                    <div class="step-card">
+                        <div class="step-num">03</div>
+                        <div class="step-body">
+                            <h5>Inizializza le Tabelle</h5>
+                            <p>Seleziona la funzione <code>initSheets</code> nella barra in alto e clicca su <strong>Esegui (Run)</strong>. Questo creerà automaticamente i fogli <code>DatiClima</code> e <code>Sensori</code>.</p>
+                        </div>
+                    </div>
+
+                    <div class="step-card">
+                        <div class="step-num">04</div>
+                        <div class="step-body">
+                            <h5>Pubblica come Web App</h5>
+                            <p>Fai clic su <strong>Distribuisci</strong> &rarr; <strong>Nuova distribuzione</strong>. Seleziona il tipo <strong>Applicazione web</strong>, esegui come <strong>Tu (Me)</strong> ed imposta chi ha accesso su <strong>Chiunque (Anyone)</strong>. Clicca su Distribuisci.</p>
+                        </div>
+                    </div>
+
+                    <div class="step-card">
+                        <div class="step-num">05</div>
+                        <div class="step-body">
+                            <h5>Copia e Incolla la URL</h5>
+                            <p>Copia la URL fornita al termine (inizia con <code>https://script.google.com/...</code>) ed incollala nel box qui sopra per attivare il monitoraggio.</p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -52,6 +97,7 @@
             
             <!-- CONTROLLI E LIVE STATUS -->
             <div class="controls-bar card">
+                <div class="scan-line"></div>
                 <div class="control-group">
                     <label for="deviceSelector" class="control-label">TERRARIO / BOX:</label>
                     <select id="deviceSelector" class="select-square">
@@ -73,6 +119,7 @@
                 
                 <!-- Temperatura -->
                 <div class="card val-card temp-card">
+                    <div class="scan-line"></div>
                     <div class="val-header">
                         <span class="val-icon">🔥</span>
                         <span class="val-label">TEMPERATURA</span>
@@ -85,6 +132,7 @@
 
                 <!-- Umidità -->
                 <div class="card val-card hum-card">
+                    <div class="scan-line"></div>
                     <div class="val-header">
                         <span class="val-icon">💧</span>
                         <span class="val-label">UMIDITÀ RELATIVA</span>
@@ -99,11 +147,13 @@
 
             <!-- GRAFICO STORICO -->
             <div class="card chart-card">
+                <div class="scan-line"></div>
                 <div class="chart-header-row">
                     <h3 class="card-title">ANDAMENTO CLIMATICO</h3>
                     
                     <!-- Selettore Range Temporale -->
-                    <div class="range-selector">
+                    <div class="range-selector" id="rangeSelector">
+                        <div class="range-pill" id="rangePill"></div>
                         <button class="btn-range" data-range="24h">24 ORE</button>
                         <button class="btn-range active" data-range="7d">7 GIORNI</button>
                         <button class="btn-range" data-range="30d">30 GIORNI</button>
@@ -133,6 +183,7 @@
                 
                 <!-- Statistiche Temperatura -->
                 <div class="card stat-card temp-stat">
+                    <div class="scan-line"></div>
                     <h4 class="stat-card-title">TEMPERATURA (&deg;C)</h4>
                     <div class="stat-rows-container">
                         <div class="stat-row">
@@ -152,6 +203,7 @@
 
                 <!-- Statistiche Umidità -->
                 <div class="card stat-card hum-stat">
+                    <div class="scan-line"></div>
                     <h4 class="stat-card-title">UMIDITÀ (% RH)</h4>
                     <div class="stat-rows-container">
                         <div class="stat-row">
@@ -173,6 +225,7 @@
 
             <!-- TABELLA DATI RECENTI -->
             <div class="card table-card">
+                <div class="scan-line"></div>
                 <h3 class="card-title">REGISTRO LETTURE RECENTI</h3>
                 <div class="table-container">
                     <table id="readingsTable">

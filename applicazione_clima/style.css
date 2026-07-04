@@ -19,9 +19,70 @@ body {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow-x: hidden;
+    position: relative;
 }
 
-/* Contenitore App - Wide Screen Layout (utilizza quasi tutto lo schermo) */
+/* ── SFONDO GRIGLIA TECNICA ──────────────────────────────────────── */
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+        linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 48px 48px;
+    z-index: 0;
+    pointer-events: none;
+}
+
+/* Vignetta nera ai bordi */
+body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.8) 100%);
+    z-index: 0;
+    pointer-events: none;
+}
+
+/* ── GLOWS AMBIENTALI RESPIRANTI ──────────────────────────────────── */
+.ambient-glow {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(90px);
+    pointer-events: none;
+    z-index: 0;
+}
+
+.ambient-glow-red {
+    width: 700px;
+    height: 700px;
+    top: -15%;
+    left: -8%;
+    background: radial-gradient(circle, rgba(255,71,87,0.065) 0%, transparent 65%);
+    animation: breatheRed 9s ease-in-out infinite;
+}
+
+.ambient-glow-blue {
+    width: 600px;
+    height: 600px;
+    bottom: -15%;
+    right: -8%;
+    background: radial-gradient(circle, rgba(84,160,255,0.065) 0%, transparent 65%);
+    animation: breatheBlue 11s ease-in-out infinite;
+}
+
+@keyframes breatheRed {
+    0%, 100% { opacity: 0.55; transform: scale(1); }
+    50%       { opacity: 1;    transform: scale(1.18); }
+}
+
+@keyframes breatheBlue {
+    0%, 100% { opacity: 0.45; transform: scale(1); }
+    50%       { opacity: 0.9;  transform: scale(1.14); }
+}
+
+/* Contenitore App - Wide Screen Layout */
 .app-container {
     max-width: 1600px;
     width: 95%;
@@ -30,18 +91,27 @@ body {
     display: flex;
     flex-direction: column;
     min-height: 100vh;
+    position: relative;
+    z-index: 1;
 }
 
 /* ── ANIMATION DEFINITIONS ──────────────────────────────────────── */
 @keyframes fadeInUp {
-    from {
-        opacity: 0;
-        transform: translateY(15px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+    from { opacity: 0; transform: translateY(22px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeInDown {
+    from { opacity: 0; transform: translateY(-22px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Scan-line: striscia di luce che percorre la card all'ingresso */
+@keyframes scanDown {
+    0%   { top: -3px; opacity: 0; }
+    8%   { opacity: 1; }
+    92%  { opacity: 1; }
+    100% { top: calc(100% + 3px); opacity: 0; }
 }
 
 @keyframes spin {
@@ -64,38 +134,38 @@ body {
     }
 }
 
-/* Applicazione animazione d'ingresso staggered */
+/* Ingresso orchestrato — easing cinematico */
 .logo-area, .section-tagline {
-    animation: fadeInUp 0.8s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+    animation: fadeInDown 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .controls-bar {
-    animation: fadeInUp 0.8s cubic-bezier(0.25, 1, 0.5, 1) 0.1s forwards;
+    animation: fadeInUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.15s forwards;
     opacity: 0;
 }
 
 .val-card.temp-card {
-    animation: fadeInUp 0.8s cubic-bezier(0.25, 1, 0.5, 1) 0.2s forwards;
+    animation: fadeInUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.28s forwards;
     opacity: 0;
 }
 
 .val-card.hum-card {
-    animation: fadeInUp 0.8s cubic-bezier(0.25, 1, 0.5, 1) 0.3s forwards;
+    animation: fadeInUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.38s forwards;
     opacity: 0;
 }
 
 .chart-card {
-    animation: fadeInUp 0.8s cubic-bezier(0.25, 1, 0.5, 1) 0.4s forwards;
+    animation: fadeInUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.5s forwards;
     opacity: 0;
 }
 
 .temp-stat, .hum-stat {
-    animation: fadeInUp 0.8s cubic-bezier(0.25, 1, 0.5, 1) 0.5s forwards;
+    animation: fadeInUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.62s forwards;
     opacity: 0;
 }
 
 .table-card {
-    animation: fadeInUp 0.8s cubic-bezier(0.25, 1, 0.5, 1) 0.6s forwards;
+    animation: fadeInUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.72s forwards;
     opacity: 0;
 }
 
@@ -143,20 +213,59 @@ body {
 
 /* ── CARDS (SQUARE DESIGN CON MICRO-INTERAZIONI) ─────────────────── */
 .card {
-    background-color: #000000;
+    background-color: rgba(2, 2, 2, 0.96);
     border: 1px solid rgba(255, 255, 255, 0.08);
     padding: 2rem;
     margin-bottom: 1.5rem;
     border-radius: 0px;
-    transition: transform 0.4s cubic-bezier(0.25, 1, 0.5, 1), 
-                border-color 0.4s cubic-bezier(0.25, 1, 0.5, 1), 
-                box-shadow 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 0.45s cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Angoli decorativi sci-fi */
+.card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 12px; height: 12px;
+    border-top: 2px solid rgba(255,255,255,0.3);
+    border-left: 2px solid rgba(255,255,255,0.3);
+    pointer-events: none;
+}
+
+.card::after {
+    content: '';
+    position: absolute;
+    bottom: 0; right: 0;
+    width: 12px; height: 12px;
+    border-bottom: 2px solid rgba(255,255,255,0.3);
+    border-right: 2px solid rgba(255,255,255,0.3);
+    pointer-events: none;
 }
 
 .card:hover {
     transform: translateY(-4px);
-    border-color: rgba(255, 255, 255, 0.2);
-    box-shadow: 0 12px 35px rgba(255, 255, 255, 0.02);
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+}
+
+/* Scan-line interna alla card (attivata via JS su ingresso) */
+.card .scan-line {
+    position: absolute;
+    left: 0; right: 0;
+    top: -3px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent);
+    pointer-events: none;
+    opacity: 0;
+    z-index: 10;
+}
+
+.card.scan-active .scan-line {
+    animation: scanDown 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
 .card-title {
@@ -215,52 +324,155 @@ body {
     transform: scale(0.99);
 }
 
-/* ── CONFIGURAZIONE GUIDA E DI SETUP ────────────────────────────── */
+/* ── CONFIGURAZIONE GUIDA E DI SETUP (STILE PREMIUM & ANIMATO) ──── */
 .setup-guide {
     max-width: 650px;
-    margin: 2rem auto;
+    margin: 4rem auto;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+.setup-guide:hover {
+    border-color: rgba(255, 255, 255, 0.25);
+    box-shadow: 0 25px 60px rgba(255, 255, 255, 0.03);
 }
 
 .guide-text {
-    color: #cccccc;
-    margin-bottom: 1.5rem;
+    color: #b3b3b3;
+    margin-bottom: 2rem;
+    font-size: 0.95rem;
 }
 
 .setup-form {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 1.2rem;
     margin-bottom: 2rem;
 }
 
-.guide-instructions {
+.input-wrapper {
+    position: relative;
+    width: 100%;
+}
+
+.setup-feedback {
+    font-size: 0.78rem;
+    margin-top: 0.5rem;
+    min-height: 18px;
+    transition: all 0.3s ease;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+}
+
+.setup-feedback.valid {
+    color: #2ed573; /* verde */
+}
+
+.setup-feedback.invalid {
+    color: #ff4757; /* rosso */
+}
+
+/* Accordion Guida */
+.guide-accordion {
     border-top: 1px solid rgba(255, 255, 255, 0.08);
+    margin-top: 2rem;
     padding-top: 1.5rem;
 }
 
-.guide-instructions h4 {
-    font-size: 0.9rem;
-    letter-spacing: 0.1em;
-    color: #ffffff;
-    text-transform: uppercase;
-    margin-bottom: 0.8rem;
-}
-
-.guide-instructions ol {
-    margin-left: 1.25rem;
+.btn-guide-toggle {
+    width: 100%;
+    background: transparent;
+    border: 1px dashed rgba(255, 255, 255, 0.15);
     color: #888888;
+    padding: 0.8rem 1rem;
+    font-family: 'Anton', sans-serif;
     font-size: 0.85rem;
+    letter-spacing: 0.15em;
+    font-weight: 400;
+    text-transform: uppercase;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0.5rem;
 }
 
-.guide-instructions li {
-    margin-bottom: 0.5rem;
+.btn-guide-toggle:hover {
+    color: #ffffff;
+    border-color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.02);
 }
 
-.guide-instructions code {
+.btn-guide-toggle .toggle-icon {
+    font-size: 0.9rem;
+    transition: transform 0.3s ease;
+    font-weight: bold;
+}
+
+.btn-guide-toggle.active .toggle-icon {
+    transform: rotate(180deg);
+}
+
+.guide-steps-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+/* Schede dei passaggi di setup */
+.step-card {
+    display: flex;
+    gap: 1.5rem;
+    padding: 1.2rem;
+    background-color: rgba(255, 255, 255, 0.01);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    align-items: flex-start;
+    transition: all 0.3s ease;
+}
+
+.step-card:hover {
+    background-color: rgba(255, 255, 255, 0.02);
+    border-color: rgba(255, 255, 255, 0.1);
+    transform: translateX(3px);
+}
+
+.step-num {
+    font-family: 'Anton', sans-serif;
+    font-size: 1.8rem;
+    color: #666666;
+    line-height: 1;
+    letter-spacing: 0.05em;
+    transition: color 0.3s ease;
+}
+
+.step-card:hover .step-num {
+    color: #ffffff;
+}
+
+.step-body h5 {
+    font-size: 0.9rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #ffffff;
+    margin-bottom: 0.3rem;
+}
+
+.step-body p {
+    font-size: 0.8rem;
+    color: #888888;
+    line-height: 1.5;
+}
+
+.step-body code {
     color: #ffffff;
     background-color: rgba(255, 255, 255, 0.08);
     padding: 0.1rem 0.3rem;
     font-family: monospace;
+    font-size: 0.8rem;
 }
 
 /* ── CONTROLLI DELLA DASHBOARD ───────────────────────────────────── */
@@ -433,36 +645,49 @@ body {
     margin-bottom: 0;
 }
 
-/* Selettore Range Temporale */
+/* Selettore Range Temporale — con PILL INDICATOR scorrevole */
 .range-selector {
     display: flex;
+    position: relative;
     border: 1px solid rgba(255, 255, 255, 0.1);
+    background: #080808;
+    padding: 3px;
+}
+
+/* Pill bianca che scorre sotto il bottone attivo */
+.range-pill {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    height: calc(100% - 6px);
+    background: #ffffff;
+    pointer-events: none;
+    z-index: 0;
+    transition: left 0.4s cubic-bezier(0.34, 1.56, 0.64, 1),
+                width 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .btn-range {
+    position: relative;
+    z-index: 1;
     background-color: transparent;
-    color: #666666;
+    color: #555555;
     border: none;
     padding: 0.6rem 1.2rem;
     font-size: 0.75rem;
     font-weight: 700;
     letter-spacing: 0.15em;
     cursor: pointer;
-    transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
-}
-
-.btn-range:not(:last-child) {
-    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    transition: color 0.3s ease;
+    white-space: nowrap;
 }
 
 .btn-range.active {
-    background-color: #ffffff;
     color: #000000;
 }
 
 .btn-range:hover:not(.active) {
-    color: #ffffff;
-    background-color: rgba(255, 255, 255, 0.06);
+    color: #aaaaaa;
 }
 
 .chart-wrapper {
@@ -568,28 +793,39 @@ body {
     font-family: 'Anton', sans-serif;
     font-size: 1.4rem;
     letter-spacing: 0.05em;
+    transition: text-shadow 0.4s ease;
 }
 
 .text-temp {
     color: #ff4757;
+    text-shadow: 0 0 10px rgba(255, 71, 87, 0.12);
 }
 
 .text-hum {
     color: #54a0ff;
+    text-shadow: 0 0 10px rgba(84, 160, 255, 0.12);
 }
 
 .temp-stat {
     border-top: 2px solid #ff4757;
 }
+.temp-stat:hover .text-temp {
+    text-shadow: 0 0 18px rgba(255, 71, 87, 0.55), 0 0 35px rgba(255, 71, 87, 0.15);
+}
 .temp-stat:hover {
-    border-color: rgba(255, 71, 87, 0.2);
+    border-color: rgba(255, 71, 87, 0.3);
+    box-shadow: 0 0 30px rgba(255, 71, 87, 0.04);
 }
 
 .hum-stat {
     border-top: 2px solid #54a0ff;
 }
+.hum-stat:hover .text-hum {
+    text-shadow: 0 0 18px rgba(84, 160, 255, 0.55), 0 0 35px rgba(84, 160, 255, 0.15);
+}
 .hum-stat:hover {
-    border-color: rgba(84, 160, 255, 0.2);
+    border-color: rgba(84, 160, 255, 0.3);
+    box-shadow: 0 0 30px rgba(84, 160, 255, 0.04);
 }
 
 /* ── TABELLA REGISTRO LETTURE ────────────────────────────────────── */

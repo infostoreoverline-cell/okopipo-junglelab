@@ -18,6 +18,9 @@ const DOM = {
     setupGuide: document.getElementById('setupGuide'),
     scriptUrlInput: document.getElementById('scriptUrlInput'),
     btnSaveUrl: document.getElementById('btnSaveUrl'),
+    setupFeedback: document.getElementById('setupFeedback'),
+    btnToggleGuide: document.getElementById('btnToggleGuide'),
+    guideSteps: document.getElementById('guideSteps'),
     
     dashboardMain: document.getElementById('dashboardMain'),
     deviceSelector: document.getElementById('deviceSelector'),
@@ -70,19 +73,101 @@ function initApp() {
         if (AppState.refreshInterval) clearInterval(AppState.refreshInterval);
         AppState.refreshInterval = setInterval(fetchData, 60000);
     }
+
+    // Attiva animazioni premium (pill + scan-line)
+    initRangePill();
+    initScanLines();
 }
 
 // ── EVENT LISTENERS ───────────────────────────────────────────────
 function setupEventListeners() {
-    // Bottone Salva Configurazione
-    DOM.btnSaveUrl.addEventListener('click', () => {
+    // Monitoraggio input per validazione in tempo reale
+    DOM.scriptUrlInput.addEventListener('input', () => {
         const url = DOM.scriptUrlInput.value.trim();
-        if (url && url.startsWith('https://script.google.com/')) {
-            localStorage.setItem('okopipi_script_url', url);
-            AppState.scriptUrl = url;
-            initApp();
+        if (!url) {
+            DOM.setupFeedback.textContent = '';
+            DOM.setupFeedback.className = 'setup-feedback';
+            return;
+        }
+        
+        if (url.startsWith('https://script.google.com/')) {
+            DOM.setupFeedback.textContent = '✓ Formato URL valido. Pronto per il collegamento.';
+            DOM.setupFeedback.className = 'setup-feedback valid';
+            DOM.btnSaveUrl.disabled = false;
+            DOM.btnSaveUrl.style.opacity = '1';
         } else {
-            alert('Inserisci una URL valida di Google Apps Script (deve iniziare con https://script.google.com/)');
+            DOM.setupFeedback.textContent = '✗ La URL deve iniziare con https://script.google.com/';
+            DOM.setupFeedback.className = 'setup-feedback invalid';
+            DOM.btnSaveUrl.disabled = true;
+            DOM.btnSaveUrl.style.opacity = '0.5';
+        }
+    });
+
+    // Toggle della Guida Passo-Passo (Accordion Animato)
+    DOM.btnToggleGuide.addEventListener('click', () => {
+        const isExpanded = DOM.btnToggleGuide.classList.contains('active');
+        if (isExpanded) {
+            DOM.btnToggleGuide.classList.remove('active');
+            DOM.guideSteps.style.maxHeight = '0px';
+            DOM.guideSteps.style.opacity = '0';
+        } else {
+            DOM.btnToggleGuide.classList.add('active');
+            DOM.guideSteps.style.maxHeight = DOM.guideSteps.scrollHeight + 'px';
+            DOM.guideSteps.style.opacity = '1';
+        }
+    });
+
+    // Connessione con verifica al click
+    DOM.btnSaveUrl.addEventListener('click', async () => {
+        const url = DOM.scriptUrlInput.value.trim();
+        if (!url || !url.startsWith('https://script.google.com/')) {
+            DOM.setupFeedback.textContent = '✗ Inserisci una URL valida per procedere.';
+            DOM.setupFeedback.className = 'setup-feedback invalid';
+            return;
+        }
+        
+        // Stato di caricamento
+        DOM.btnSaveUrl.disabled = true;
+        DOM.btnSaveUrl.textContent = 'COLLEGAMENTO IN CORSO...';
+        DOM.btnSaveUrl.style.opacity = '0.7';
+        DOM.setupFeedback.textContent = 'Verifica connessione al foglio Google in corso...';
+        DOM.setupFeedback.className = 'setup-feedback';
+        
+        try {
+            // Test GET per verificare che l'endpoint risponda ed esista
+            const testUrl = `${url}?range=24h`;
+            const response = await fetch(testUrl, { method: 'GET', redirect: 'follow' });
+            
+            if (!response.ok) {
+                throw new Error(`Server ha risposto con codice errore: ${response.status}`);
+            }
+            
+            const testJson = await response.json();
+            
+            if (testJson.status === 'success') {
+                localStorage.setItem('okopipi_script_url', url);
+                AppState.scriptUrl = url;
+                
+                DOM.setupFeedback.textContent = '✓ Connessione stabilita con successo! Caricamento...';
+                DOM.setupFeedback.className = 'setup-feedback valid';
+                
+                // Transizione fluida e avvio
+                setTimeout(() => {
+                    DOM.btnSaveUrl.disabled = false;
+                    DOM.btnSaveUrl.textContent = 'CONNETTI ORA';
+                    DOM.btnSaveUrl.style.opacity = '1';
+                    initApp();
+                }, 1000);
+            } else {
+                throw new Error(testJson.message || 'La risposta del server non è valida.');
+            }
+        } catch (error) {
+            console.error('Test di connessione fallito:', error);
+            DOM.btnSaveUrl.disabled = false;
+            DOM.btnSaveUrl.textContent = 'CONNETTI ORA';
+            DOM.btnSaveUrl.style.opacity = '1';
+            DOM.setupFeedback.textContent = '✗ Connessione fallita. Verifica che la URL sia corretta ed il foglio sia condiviso.';
+            DOM.setupFeedback.className = 'setup-feedback invalid';
         }
     });
 
@@ -102,17 +187,60 @@ function setupEventListeners() {
         renderDashboard();
     });
 
-    // Selettore Range Temporale
+    // Selettore Range Temporale — con pill indicator
     DOM.rangeButtons.forEach(button => {
         button.addEventListener('click', (e) => {
-            // Rimuovi classe attiva da tutti i bottoni del range
             DOM.rangeButtons.forEach(btn => btn.classList.remove('active'));
-            // Aggiungi al bottone cliccato
             e.target.classList.add('active');
-            
+            movePillTo(e.target);
             AppState.activeRange = e.target.getAttribute('data-range');
             fetchData();
         });
+    });
+}
+
+// ── PILL INDICATOR: SCORRE SOTTO IL BOTTONE ATTIVO ─────────────────
+function initRangePill() {
+    const pill = document.getElementById('rangePill');
+    const rangeSelector = document.getElementById('rangeSelector');
+    if (!pill || !rangeSelector) return;
+
+    const activeBtn = rangeSelector.querySelector('.btn-range.active');
+    if (activeBtn) {
+        // Posiziona la pill immediatamente (senza transizione) all'avvio
+        pill.style.transition = 'none';
+        movePillTo(activeBtn);
+        // Riabilita la transizione dopo il primo frame
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                pill.style.transition = '';
+            });
+        });
+    }
+}
+
+function movePillTo(btn) {
+    const pill = document.getElementById('rangePill');
+    const rangeSelector = document.getElementById('rangeSelector');
+    if (!pill || !rangeSelector) return;
+    const sRect = rangeSelector.getBoundingClientRect();
+    const bRect = btn.getBoundingClientRect();
+    pill.style.left  = (bRect.left - sRect.left - 3) + 'px';
+    pill.style.width = bRect.width + 'px';
+}
+
+// ── SCAN-LINE: EFFETTO "SCANNER" ALL'INGRESSO DELLE CARD ───────────
+function initScanLines() {
+    // Triggera la scan-line su ogni card scalando i delay
+    const cards = document.querySelectorAll('.card');
+    const delays = [200, 350, 500, 650, 800, 950, 1100, 1250];
+    cards.forEach((card, i) => {
+        const delay = delays[i] ?? (200 + i * 140);
+        setTimeout(() => {
+            card.classList.add('scan-active');
+            // Rimuove la classe dopo la fine dell'animazione (1s) per pulizia
+            setTimeout(() => card.classList.remove('scan-active'), 1100);
+        }, delay);
     });
 }
 
@@ -238,16 +366,36 @@ function renderDashboard() {
     populateTable(filteredData);
 }
 
-// ── DISEGNA IL GRAFICO CLIMATICO (CHART.JS) ──────────────────────
+// ── CROSSHAIR PLUGIN: linea verticale tratteggiata al tooltip ───────
+const crosshairPlugin = {
+    id: 'crosshair',
+    afterDraw(chart) {
+        if (chart.tooltip._active && chart.tooltip._active.length) {
+            const x = chart.tooltip._active[0].element.x;
+            const { top, bottom } = chart.chartArea;
+            const c = chart.ctx;
+            c.save();
+            c.beginPath();
+            c.moveTo(x, top);
+            c.lineTo(x, bottom);
+            c.strokeStyle = 'rgba(255,255,255,0.1)';
+            c.lineWidth = 1;
+            c.setLineDash([4, 4]);
+            c.stroke();
+            c.restore();
+        }
+    }
+};
+
+// ── DISEGNA IL GRAFICO CLIMATICO (CHART.JS) ─────────────────────
 function renderChart(data) {
+
     if (AppState.chartInstance) {
         AppState.chartInstance.destroy();
     }
     
-    // Estrai etichette (timestamp) e valori
     const labels = data.map(item => {
         const date = new Date(item.timestamp);
-        // Se visualizziamo le ultime 24 ore, mostra solo l'ora, altrimenti mostra giorno/mese e ora
         if (AppState.activeRange === '24h') {
             return date.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
         } else {
@@ -256,23 +404,30 @@ function renderChart(data) {
     });
     
     const tempDataset = data.map(item => item.temperature);
-    const humDataset = data.map(item => item.humidity);
+    const humDataset  = data.map(item => item.humidity);
     
     const ctx = DOM.climateChartCanvas.getContext('2d');
     
-    // Genera gradienti per le aree sottostanti le curve (Stile premium)
-    const tempGrad = ctx.createLinearGradient(0, 0, 0, 300);
-    tempGrad.addColorStop(0, 'rgba(255, 71, 87, 0.2)');
-    tempGrad.addColorStop(1, 'rgba(255, 71, 87, 0.0)');
+    // Gradienti area (con mid-stop per effetto più morbido)
+    const tempGrad = ctx.createLinearGradient(0, 0, 0, 340);
+    tempGrad.addColorStop(0,   'rgba(255, 71, 87, 0.22)');
+    tempGrad.addColorStop(0.5, 'rgba(255, 71, 87, 0.06)');
+    tempGrad.addColorStop(1,   'rgba(255, 71, 87, 0.0)');
     
-    const humGrad = ctx.createLinearGradient(0, 0, 0, 300);
-    humGrad.addColorStop(0, 'rgba(84, 160, 255, 0.2)');
-    humGrad.addColorStop(1, 'rgba(84, 160, 255, 0.0)');
+    const humGrad = ctx.createLinearGradient(0, 0, 0, 340);
+    humGrad.addColorStop(0,   'rgba(84, 160, 255, 0.22)');
+    humGrad.addColorStop(0.5, 'rgba(84, 160, 255, 0.06)');
+    humGrad.addColorStop(1,   'rgba(84, 160, 255, 0.0)');
+
+    // Durata disegno punto per punto da sinistra (~1.4s totali)
+    const drawDuration = 1400;
+    const dpDelay = drawDuration / Math.max(labels.length, 1);
     
     AppState.chartInstance = new Chart(ctx, {
         type: 'line',
+        plugins: [crosshairPlugin],
         data: {
-            labels: labels,
+            labels,
             datasets: [
                 {
                     label: 'Temperatura (°C)',
@@ -281,10 +436,12 @@ function renderChart(data) {
                     backgroundColor: tempGrad,
                     borderWidth: 2,
                     fill: true,
-                    tension: 0.35,
-                    pointRadius: labels.length > 50 ? 0 : 2,
-                    pointHoverRadius: 5,
-                    pointBackgroundColor: '#ff4757',
+                    tension: 0.42,
+                    pointRadius: labels.length > 50 ? 0 : 3,
+                    pointHoverRadius: 7,
+                    pointBackgroundColor: '#000',
+                    pointBorderColor: '#ff4757',
+                    pointBorderWidth: 2,
                     yAxisID: 'yTemp'
                 },
                 {
@@ -294,10 +451,12 @@ function renderChart(data) {
                     backgroundColor: humGrad,
                     borderWidth: 2,
                     fill: true,
-                    tension: 0.35,
-                    pointRadius: labels.length > 50 ? 0 : 2,
-                    pointHoverRadius: 5,
-                    pointBackgroundColor: '#54a0ff',
+                    tension: 0.42,
+                    pointRadius: labels.length > 50 ? 0 : 3,
+                    pointHoverRadius: 7,
+                    pointBackgroundColor: '#000',
+                    pointBorderColor: '#54a0ff',
+                    pointBorderWidth: 2,
                     yAxisID: 'yHum'
                 }
             ]
@@ -305,104 +464,98 @@ function renderChart(data) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            interaction: {
-                mode: 'index',
-                intersect: false
+            // Animazione: disegno da sinistra punto per punto
+            animation: {
+                x: {
+                    type: 'number', easing: 'easeOutQuart',
+                    duration: dpDelay, from: NaN,
+                    delay(ctx) {
+                        if (ctx.type !== 'data' || ctx.xStarted) return 0;
+                        ctx.xStarted = true;
+                        return ctx.index * dpDelay;
+                    }
+                },
+                y: {
+                    type: 'number', easing: 'easeOutQuart',
+                    duration: dpDelay, from: NaN,
+                    delay(ctx) {
+                        if (ctx.type !== 'data' || ctx.yStarted) return 0;
+                        ctx.yStarted = true;
+                        return ctx.index * dpDelay;
+                    }
+                }
             },
+            interaction: { mode: 'index', intersect: false },
             plugins: {
                 legend: {
                     display: true,
                     position: 'top',
                     labels: {
-                        color: '#888888',
-                        font: {
-                            family: 'Inter',
-                            size: 11
-                        },
-                        boxWidth: 15
+                        color: '#666',
+                        font: { family: 'Inter', size: 10, weight: 600 },
+                        boxWidth: 12,
+                        padding: 16
                     }
                 },
                 tooltip: {
-                    backgroundColor: '#000000',
+                    backgroundColor: 'rgba(2,2,2,0.96)',
                     titleColor: '#ffffff',
-                    bodyColor: '#cccccc',
-                    borderColor: 'rgba(255, 255, 255, 0.1)',
+                    bodyColor: '#999999',
+                    borderColor: 'rgba(255,255,255,0.09)',
                     borderWidth: 1,
-                    cornerRadius: 0, // Squadrato anche il tooltip
-                    padding: 10,
-                    titleFont: { family: 'Inter', weight: 'bold' },
-                    bodyFont: { family: 'Inter' },
+                    cornerRadius: 0,
+                    padding: 12,
+                    titleFont: { family: 'Inter', weight: '700', size: 12 },
+                    bodyFont:  { family: 'Inter', size: 11 },
                     callbacks: {
-                        label: function(context) {
-                            let label = context.dataset.label || '';
-                            if (label) {
-                                label += ': ';
-                            }
-                            if (context.parsed.y !== null) {
-                                label += context.parsed.y.toFixed(1);
-                                label += context.datasetIndex === 0 ? ' °C' : ' % RH';
-                            }
-                            return label;
+                        label(context) {
+                            const v = context.parsed.y !== null ? context.parsed.y.toFixed(1) : '--';
+                            return context.datasetIndex === 0
+                                ? `  Temperatura:  ${v} °C`
+                                : `  Umidità:      ${v} % RH`;
                         }
                     }
                 }
             },
             scales: {
                 x: {
-                    grid: {
-                        color: 'rgba(255, 255, 255, 0.03)',
-                        borderColor: 'rgba(255, 255, 255, 0.05)'
-                    },
-                    ticks: {
-                        color: '#666666',
-                        font: { family: 'Inter', size: 9 },
-                        maxTicksLimit: 12
-                    }
+                    grid: { color: 'rgba(255,255,255,0.025)', drawBorder: false },
+                    ticks: { color: '#555', font: { family: 'Inter', size: 9 }, maxTicksLimit: 12 }
                 },
                 yTemp: {
-                    type: 'linear',
-                    position: 'left',
-                    grid: {
-                        color: 'rgba(255, 255, 255, 0.04)',
-                        borderColor: 'rgba(255, 255, 255, 0.05)'
-                    },
+                    type: 'linear', position: 'left',
+                    grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
                     ticks: {
-                        color: '#ff4757',
+                        color: 'rgba(255,71,87,0.8)',
                         font: { family: 'Inter', size: 10 },
-                        callback: value => value.toFixed(0) + ' °C'
+                        callback: v => v.toFixed(0) + ' °C'
                     },
                     title: {
-                        display: true,
-                        text: 'Temp (°C)',
-                        color: '#ff4757',
+                        display: true, text: 'Temp (°C)',
+                        color: 'rgba(255,71,87,0.6)',
                         font: { family: 'Inter', size: 10, weight: 'bold' }
                     }
                 },
                 yHum: {
-                    type: 'linear',
-                    position: 'right',
-                    grid: {
-                        drawOnChartArea: false, // evita righe doppie sovrapposte
-                        borderColor: 'rgba(255, 255, 255, 0.05)'
-                    },
+                    type: 'linear', position: 'right',
+                    grid: { drawOnChartArea: false, drawBorder: false },
                     ticks: {
-                        color: '#54a0ff',
+                        color: 'rgba(84,160,255,0.8)',
                         font: { family: 'Inter', size: 10 },
-                        callback: value => value.toFixed(0) + '%'
+                        callback: v => v.toFixed(0) + '%'
                     },
                     title: {
-                        display: true,
-                        text: 'Umidità (% RH)',
-                        color: '#54a0ff',
+                        display: true, text: 'Umidità (% RH)',
+                        color: 'rgba(84,160,255,0.6)',
                         font: { family: 'Inter', size: 10, weight: 'bold' }
                     },
-                    min: 0,
-                    max: 100
+                    min: 0, max: 100
                 }
             }
         }
     });
 }
+
 
 // ── CALCOLA STATISTICHE PERIODO ──────────────────────────────────
 function calculateStats(data) {

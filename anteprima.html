@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>OKOPIPI JUNGLE LAB — Monitoraggio Climatico</title>
+    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* ══ RESET ═════════════════════════════════════════ */
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* ══ ROOT BODY ══════════════════════════════════════ */
+        body {
+            background-color: #000;
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            min-height: 100vh;
+            overflow-x: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 3rem 2rem;
+            position: relative;
+        }
+
+        /* ══ SFONDO: GRIGLIA STATICA + VIGNETTA ════════════ */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.022) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.022) 1px, transparent 1px);
+            background-size: 48px 48px;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        /* Vignetta nera ai bordi per profondità */
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.85) 100%);
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        /* ══ GLOWS AMBIENTALI PULSANTI ══════════════════════ */
+        .glow {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(80px);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .glow-red {
+            width: 600px;
+            height: 600px;
+            top: -10%;
+            left: -5%;
+            background: radial-gradient(circle, rgba(255,71,87,0.07) 0%, transparent 65%);
+            animation: breatheRed 8s ease-in-out infinite;
+        }
+
+        .glow-blue {
+            width: 500px;
+            height: 500px;
+            bottom: -10%;
+            right: -5%;
+            background: radial-gradient(circle, rgba(84,160,255,0.07) 0%, transparent 65%);
+            animation: breatheBlue 10s ease-in-out infinite;
+        }
+
+        @keyframes breatheRed {
+            0%, 100% { opacity: 0.6; transform: scale(1);   }
+            50%       { opacity: 1;   transform: scale(1.15); }
+        }
+
+        @keyframes breatheBlue {
+            0%, 100% { opacity: 0.5; transform: scale(1);    }
+            50%       { opacity: 0.9; transform: scale(1.12); }
+        }
+
+        /* ══ LAYOUT ════════════════════════════════════════ */
+        .container {
+            max-width: 1200px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+            z-index: 1;
+            position: relative;
+        }
+
+        /* ══ HEADER ════════════════════════════════════════ */
+        header {
+            text-align: center;
+            padding-bottom: 2.5rem;
+            border-bottom: 1px solid rgba(255,255,255,0.07);
+            /* orchestrazione: entra per primo */
+            opacity: 0;
+            transform: translateY(-24px);
+            animation: enterDown 1s cubic-bezier(0.16, 1, 0.3, 1) 0.1s forwards;
+        }
+
+        .logo-title {
+            font-family: 'Anton', sans-serif;
+            font-size: clamp(3rem, 8vw, 5rem);
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            line-height: 1;
+            /* gradiente grigio metallico */
+            background: linear-gradient(180deg, #fff 0%, #8a8a8a 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .logo-subtitle {
+            font-family: 'Anton', sans-serif;
+            font-size: clamp(1.4rem, 4vw, 2.2rem);
+            letter-spacing: 0.44em;
+            color: rgba(255,255,255,0.85);
+            margin-top: 0.2rem;
+            margin-left: 0.44em; /* compensa letter-spacing */
+        }
+
+        .tagline {
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.32em;
+            color: #555;
+            margin-top: 1.4rem;
+            text-transform: uppercase;
+        }
+
+        /* ══ CARD BASE ══════════════════════════════════════ */
+        .card {
+            background: rgba(4, 4, 4, 0.95);
+            border: 1px solid rgba(255,255,255,0.07);
+            padding: 2.5rem;
+            position: relative;
+            overflow: hidden;
+            /* ingresso */
+            opacity: 0;
+            transform: translateY(28px);
+        }
+
+        /* Angoli decorativi (sci-fi corner marks) */
+        .card::before, .card::after {
+            content: '';
+            position: absolute;
+            width: 14px;
+            height: 14px;
+        }
+
+        .card::before {
+            top: 0; left: 0;
+            border-top: 2px solid rgba(255,255,255,0.4);
+            border-left: 2px solid rgba(255,255,255,0.4);
+        }
+
+        .card::after {
+            bottom: 0; right: 0;
+            border-bottom: 2px solid rgba(255,255,255,0.4);
+            border-right: 2px solid rgba(255,255,255,0.4);
+        }
+
+        /* ── SCAN LINE — passa sull'ingresso della card ── */
+        .card .scan-line {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: -4px;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .card.animate-in .scan-line {
+            animation: scanDown 0.9s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+
+        @keyframes scanDown {
+            0%   { top: -4px; opacity: 0; }
+            10%  { opacity: 1; }
+            90%  { opacity: 1; }
+            100% { top: calc(100% + 4px); opacity: 0; }
+        }
+
+        /* Classe di ingresso per le card */
+        .card.animate-in {
+            animation: enterUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes enterUp {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes enterDown {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ══ CHART HEADER ═══════════════════════════════════ */
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2.5rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .card-title {
+            font-family: 'Anton', sans-serif;
+            font-size: 1.5rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            padding-left: 14px;
+            position: relative;
+        }
+
+        /* Barra laterale con gradiente rosso→blu */
+        .card-title::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 12%; height: 76%; width: 3px;
+            background: linear-gradient(180deg, #ff4757 0%, #54a0ff 100%);
+            border-radius: 2px;
+        }
+
+        /* ══ RANGE SELECTOR con PILL indicator ════════════ */
+        .range-selector {
+            display: flex;
+            position: relative;
+            background: #0a0a0a;
+            border: 1px solid rgba(255,255,255,0.08);
+            padding: 3px;
+            gap: 0;
+        }
+
+        /* Pill che scorre sotto il bottone attivo */
+        .range-pill {
+            position: absolute;
+            top: 3px; left: 3px;
+            height: calc(100% - 6px);
+            background: #fff;
+            transition: left 0.4s cubic-bezier(0.34, 1.56, 0.64, 1),
+                        width 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .btn-range {
+            position: relative;
+            z-index: 1;
+            background: transparent;
+            border: none;
+            color: #666;
+            padding: 0.65rem 1.3rem;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.15em;
+            cursor: pointer;
+            transition: color 0.3s ease;
+            white-space: nowrap;
+        }
+
+        .btn-range:hover { color: #aaa; }
+
+        .btn-range.active {
+            color: #000;
+        }
+
+        /* ══ CHART WRAPPER ══════════════════════════════════ */
+        .chart-wrapper {
+            position: relative;
+            height: 420px;
+            width: 100%;
+        }
+
+        /* ══ STATS GRID ═════════════════════════════════════ */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .stat-card {
+            display: flex;
+            flex-direction: column;
+            gap: 1.4rem;
+            /* pronto ma invisibile finché JS non triggera l'ingresso */
+        }
+
+        .stat-title {
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.22em;
+            color: #444;
+            text-transform: uppercase;
+        }
+
+        .stat-values {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .stat-item {
+            text-align: center;
+            flex: 1;
+            border-right: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .stat-item:last-child { border-right: none; }
+
+        .stat-label {
+            display: block;
+            font-size: 0.62rem;
+            font-weight: 700;
+            color: #3a3a3a;
+            letter-spacing: 0.12em;
+            margin-bottom: 0.5rem;
+        }
+
+        /* Numero con transizione colore + glow */
+        .stat-number {
+            font-family: 'Anton', sans-serif;
+            font-size: 2.1rem;
+            letter-spacing: 0.02em;
+            display: inline-block;
+            line-height: 1;
+            transition: text-shadow 0.5s ease;
+        }
+
+        /* Glow permanente moderato */
+        .text-temp {
+            color: #ff4757;
+            text-shadow: 0 0 12px rgba(255,71,87,0.15);
+        }
+
+        .text-hum {
+            color: #54a0ff;
+            text-shadow: 0 0 12px rgba(84,160,255,0.15);
+        }
+
+        /* Glow intenso su hover della card */
+        .stat-card:hover .text-temp {
+            text-shadow: 0 0 20px rgba(255,71,87,0.55), 0 0 40px rgba(255,71,87,0.15);
+        }
+
+        .stat-card:hover .text-hum {
+            text-shadow: 0 0 20px rgba(84,160,255,0.55), 0 0 40px rgba(84,160,255,0.15);
+        }
+
+        /* Bordi colorati su hover della stat-card */
+        .stat-card.temp-card {
+            transition: border-color 0.4s ease, box-shadow 0.4s ease;
+        }
+
+        .stat-card.temp-card:hover {
+            border-color: rgba(255,71,87,0.25);
+            box-shadow: 0 0 30px rgba(255,71,87,0.05);
+        }
+
+        .stat-card.hum-card:hover {
+            border-color: rgba(84,160,255,0.25);
+            box-shadow: 0 0 30px rgba(84,160,255,0.05);
+        }
+
+        /* ══ BACK LINK ══════════════════════════════════════ */
+        .back-link {
+            text-align: center;
+            opacity: 0;
+            transform: translateY(16px);
+        }
+
+        .back-link a {
+            color: #3a3a3a;
+            text-decoration: none;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            padding: 0.6rem 1.2rem;
+            border: 1px solid transparent;
+            display: inline-block;
+            transition: color 0.35s ease, border-color 0.35s ease, background 0.35s ease;
+        }
+
+        .back-link a:hover {
+            color: #fff;
+            border-color: rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.025);
+        }
+
+        .back-link.animate-in {
+            animation: enterUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        /* ══ MEDIA QUERY MOBILE ═════════════════════════════ */
+        @media (max-width: 600px) {
+            body { padding: 1.5rem 1rem; }
+            .card { padding: 1.5rem; }
+            .chart-wrapper { height: 280px; }
+            .btn-range { padding: 0.55rem 0.9rem; font-size: 0.68rem; }
+            .stat-number { font-size: 1.7rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Glow ambientali -->
+    <div class="glow glow-red"></div>
+    <div class="glow glow-blue"></div>
+
+    <div class="container">
+
+        <!-- HEADER -->
+        <header>
+            <div class="logo-title">Okopipi</div>
+            <div class="logo-subtitle">Jungle Lab</div>
+            <p class="tagline">Monitoraggio Avanzato &bull; Sistema Climatico</p>
+        </header>
+
+        <!-- CHART CARD -->
+        <div class="card" id="chartCard">
+            <div class="scan-line"></div>
+            <div class="chart-header">
+                <h3 class="card-title">ANDAMENTO CLIMATICO</h3>
+                <div class="range-selector" id="rangeSelector">
+                    <div class="range-pill" id="rangePill"></div>
+                    <button class="btn-range active" data-range="24h">24 ORE</button>
+                    <button class="btn-range" data-range="7d">7 GIORNI</button>
+                    <button class="btn-range" data-range="30d">30 GIORNI</button>
+                </div>
+            </div>
+            <div class="chart-wrapper">
+                <canvas id="previewChart"></canvas>
+            </div>
+        </div>
+
+        <!-- STATS -->
+        <div class="stats-grid">
+            <div class="card stat-card temp-card" id="statTemp">
+                <div class="scan-line"></div>
+                <h4 class="stat-title">Statistiche Temperatura</h4>
+                <div class="stat-values">
+                    <div class="stat-item">
+                        <span class="stat-label">MINIMA</span>
+                        <span id="tempMin" class="stat-number text-temp">--</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">MEDIA</span>
+                        <span id="tempAvg" class="stat-number text-temp">--</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">MASSIMA</span>
+                        <span id="tempMax" class="stat-number text-temp">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card stat-card hum-card" id="statHum">
+                <div class="scan-line"></div>
+                <h4 class="stat-title">Statistiche Umidità</h4>
+                <div class="stat-values">
+                    <div class="stat-item">
+                        <span class="stat-label">MINIMA</span>
+                        <span id="humMin" class="stat-number text-hum">--</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">MEDIA</span>
+                        <span id="humAvg" class="stat-number text-hum">--</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">MASSIMA</span>
+                        <span id="humMax" class="stat-number text-hum">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="back-link" id="backLink">
+            <a href="applicazione_clima/index.html">&larr; Torna all'applicazione</a>
+        </div>
+
+    </div>
+
+    <script>
+    /* ══════════════════════════════════════════════════════
+       OKOPIPI — ANIMAZIONI 10/10
+       Orchestrazione: header → chartCard → statTemp → statHum → backLink
+    ══════════════════════════════════════════════════════ */
+
+    /* ── 1. INGRESSO ORCHESTRATO ──────────────────────────
+       Ogni elemento entra in sequenza con delay calibrato.
+       La scan-line lampeggia sopra ogni card al suo ingresso.
+    ─────────────────────────────────────────────────────── */
+    function revealSequence() {
+        const steps = [
+            { el: document.getElementById('chartCard'), delay: 200 },
+            { el: document.getElementById('statTemp'),  delay: 420 },
+            { el: document.getElementById('statHum'),   delay: 560 },
+            { el: document.getElementById('backLink'),  delay: 700 },
+        ];
+
+        steps.forEach(({ el, delay }) => {
+            setTimeout(() => {
+                el.classList.add('animate-in');
+            }, delay);
+        });
+    }
+
+    /* ── 2. RANGE SELECTOR: PILL SCORREVOLE ──────────────
+       Una pillola bianca scorre fluidamente sotto il
+       bottone attivo con spring easing (cubic-bezier con
+       overshoot leggero).
+    ─────────────────────────────────────────────────────── */
+    const pill = document.getElementById('rangePill');
+    const rangeSelector = document.getElementById('rangeSelector');
+    let activeBtn = rangeSelector.querySelector('.btn-range.active');
+
+    function movePillTo(btn) {
+        const selectorRect = rangeSelector.getBoundingClientRect();
+        const btnRect = btn.getBoundingClientRect();
+        pill.style.left  = (btnRect.left - selectorRect.left - 3) + 'px';
+        pill.style.width = btnRect.width + 'px';
+    }
+
+    // Init pill al caricamento
+    window.addEventListener('load', () => {
+        movePillTo(activeBtn);
+    });
+
+    rangeSelector.querySelectorAll('.btn-range').forEach(btn => {
+        btn.addEventListener('click', () => {
+            rangeSelector.querySelectorAll('.btn-range').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            activeBtn = btn;
+            movePillTo(btn);
+            changeRange(btn.dataset.range);
+        });
+    });
+
+    /* ── 3. COUNT-UP AVANZATO ────────────────────────────
+       Parte dal valore corrente visualizzato (non da zero)
+       e usa easeOutExpo per accelerare e poi decelerare.
+    ─────────────────────────────────────────────────────── */
+    const currentDisplayValues = {};
+
+    function easeOutExpo(t) {
+        return t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+    }
+
+    function animateCount(id, target, isDecimal = true) {
+        const el = document.getElementById(id);
+        const rawStart = currentDisplayValues[id] ?? target * 0.6;
+        const start = rawStart;
+        const duration = 1000;
+        const startTime = performance.now();
+
+        currentDisplayValues[id] = target;
+
+        function tick(now) {
+            const elapsed = Math.min(now - startTime, duration);
+            const progress = easeOutExpo(elapsed / duration);
+            const value = start + (target - start) * progress;
+            el.textContent = isDecimal ? value.toFixed(1) : Math.round(value).toString();
+            if (elapsed < duration) requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+    }
+
+    /* ── 4. GENERATORE DATI MOCK ─────────────────────────
+       Curva sinusoidale con rumore controllato per sembrare
+       dati ambientali plausibili.
+    ─────────────────────────────────────────────────────── */
+    function generateMockData(range) {
+        const temp = [], hum = [], labels = [];
+        const points = range === '24h' ? 24 : range === '7d' ? 7 : 30;
+        const tBase = 25.5, tAmp = 2.5;
+        const hBase = 82.0, hAmp = 9.0;
+
+        for (let i = 0; i < points; i++) {
+            const phase = (i / (points / 2.4)) * Math.PI;
+            const noise  = () => (Math.random() - 0.5) * 0.8;
+            temp.push(+(tBase + tAmp * Math.sin(phase) + noise()).toFixed(1));
+            hum.push( Math.min(100, Math.max(60, +(hBase - hAmp * Math.sin(phase) + noise()).toFixed(1))));
+
+            if (range === '24h') {
+                labels.push(`${String(i).padStart(2,'0')}:00`);
+            } else if (range === '7d') {
+                const d = new Date(); d.setDate(d.getDate() - (points - 1 - i));
+                labels.push(d.toLocaleDateString('it-IT', { weekday:'short', day:'2-digit' }));
+            } else {
+                const d = new Date(); d.setDate(d.getDate() - (points - 1 - i));
+                labels.push(d.toLocaleDateString('it-IT', { day:'2-digit', month:'2-digit' }));
+            }
+        }
+
+        return { temp, hum, labels };
+    }
+
+    /* ── 5. CHART ────────────────────────────────────────
+       Animazione "disegno da sinistra" con delay per punto.
+       Crosshair verticale personalizzato via plugin Canvas.
+    ─────────────────────────────────────────────────────── */
+    let chartInstance = null;
+    const canvas = document.getElementById('previewChart');
+    const ctx    = canvas.getContext('2d');
+
+    // Plugin crosshair verticale sottile
+    const crosshairPlugin = {
+        id: 'crosshair',
+        afterDraw(chart) {
+            if (chart.tooltip._active && chart.tooltip._active.length) {
+                const x = chart.tooltip._active[0].element.x;
+                const { top, bottom } = chart.chartArea;
+                const c = chart.ctx;
+                c.save();
+                c.beginPath();
+                c.moveTo(x, top);
+                c.lineTo(x, bottom);
+                c.strokeStyle = 'rgba(255,255,255,0.12)';
+                c.lineWidth = 1;
+                c.setLineDash([4, 4]);
+                c.stroke();
+                c.restore();
+            }
+        }
+    };
+
+    function makeGradient(r, g, b) {
+        const grad = ctx.createLinearGradient(0, 0, 0, 380);
+        grad.addColorStop(0,   `rgba(${r},${g},${b},0.22)`);
+        grad.addColorStop(0.5, `rgba(${r},${g},${b},0.06)`);
+        grad.addColorStop(1,   `rgba(${r},${g},${b},0.0)`);
+        return grad;
+    }
+
+    function drawChart(range) {
+        const { temp, hum, labels } = generateMockData(range);
+
+        // Aggiorna statistiche con count-up
+        animateCount('tempMin', Math.min(...temp));
+        animateCount('tempAvg', temp.reduce((a,b)=>a+b,0)/temp.length);
+        animateCount('tempMax', Math.max(...temp));
+        animateCount('humMin',  Math.min(...hum),  false);
+        animateCount('humAvg',  hum.reduce((a,b)=>a+b,0)/hum.length, false);
+        animateCount('humMax',  Math.max(...hum),  false);
+
+        if (chartInstance) chartInstance.destroy();
+
+        // Rigenera gradienti ogni volta (altrimenti rimpiccioliscono)
+        const tempGrad = makeGradient(255, 71, 87);
+        const humGrad  = makeGradient(84, 160, 255);
+
+        // Delay per punto: traccia da sinistra in ~1.4s
+        const drawDuration = 1400;
+        const dpDelay = drawDuration / labels.length;
+
+        chartInstance = new Chart(ctx, {
+            type: 'line',
+            plugins: [crosshairPlugin],
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Temperatura (°C)',
+                        data: temp,
+                        borderColor: '#ff4757',
+                        backgroundColor: tempGrad,
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.42,
+                        pointRadius: labels.length > 25 ? 0 : 3,
+                        pointHoverRadius: 7,
+                        pointBackgroundColor: '#000',
+                        pointBorderColor: '#ff4757',
+                        pointBorderWidth: 2,
+                        yAxisID: 'yTemp'
+                    },
+                    {
+                        label: 'Umidità (% RH)',
+                        data: hum,
+                        borderColor: '#54a0ff',
+                        backgroundColor: humGrad,
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.42,
+                        pointRadius: labels.length > 25 ? 0 : 3,
+                        pointHoverRadius: 7,
+                        pointBackgroundColor: '#000',
+                        pointBorderColor: '#54a0ff',
+                        pointBorderWidth: 2,
+                        yAxisID: 'yHum'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                /* Animazione: disegno punto per punto da sinistra */
+                animation: {
+                    x: {
+                        type: 'number', easing: 'easeOutQuart',
+                        duration: dpDelay, from: NaN,
+                        delay(ctx) {
+                            if (ctx.type !== 'data' || ctx.xStarted) return 0;
+                            ctx.xStarted = true;
+                            return ctx.index * dpDelay;
+                        }
+                    },
+                    y: {
+                        type: 'number', easing: 'easeOutQuart',
+                        duration: dpDelay, from: NaN,
+                        delay(ctx) {
+                            if (ctx.type !== 'data' || ctx.yStarted) return 0;
+                            ctx.yStarted = true;
+                            return ctx.index * dpDelay;
+                        }
+                    }
+                },
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: {
+                            color: '#555',
+                            font: { family: 'Inter', size: 10, weight: 600 },
+                            boxWidth: 12,
+                            padding: 16
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(2,2,2,0.95)',
+                        titleColor: '#fff',
+                        bodyColor: '#999',
+                        borderColor: 'rgba(255,255,255,0.09)',
+                        borderWidth: 1,
+                        cornerRadius: 0,
+                        padding: 12,
+                        titleFont: { family: 'Inter', weight: '700', size: 12 },
+                        bodyFont:  { family: 'Inter', size: 11 },
+                        callbacks: {
+                            label: ctx => {
+                                const v = ctx.parsed.y.toFixed(1);
+                                return ctx.datasetIndex === 0
+                                    ? `  Temperatura:  ${v} °C`
+                                    : `  Umidità:      ${v} %`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(255,255,255,0.025)', drawBorder: false },
+                        ticks: { color: '#444', font: { family: 'Inter', size: 9 }, maxTicksLimit: 10 }
+                    },
+                    yTemp: {
+                        type: 'linear', position: 'left',
+                        grid: { color: 'rgba(255,255,255,0.03)', drawBorder: false },
+                        ticks: {
+                            color: 'rgba(255,71,87,0.7)',
+                            font: { family: 'Inter', size: 9 },
+                            callback: v => v.toFixed(0) + ' °C'
+                        }
+                    },
+                    yHum: {
+                        type: 'linear', position: 'right',
+                        grid: { drawOnChartArea: false, drawBorder: false },
+                        ticks: {
+                            color: 'rgba(84,160,255,0.7)',
+                            font: { family: 'Inter', size: 9 },
+                            callback: v => v.toFixed(0) + ' %'
+                        },
+                        min: 50, max: 100
+                    }
+                }
+            }
+        });
+    }
+
+    function changeRange(range) {
+        drawChart(range);
+    }
+
+    /* ── 6. AVVIO ────────────────────────────────────────
+       Prima il disegno, poi la sequenza di ingresso.
+    ─────────────────────────────────────────────────────── */
+    drawChart('24h');
+    revealSequence();
+    </script>
+</body>
+</html>

@@ -505,7 +505,7 @@ static void sendWiFiData() {
     if (f) f.close();
     LittleFS.end(); wifiOff(); return;
   }
-  DBG_PRINTF("[WiFi] Invio %u byte di dati...\n", (unsigned)f.size());
+  DBG_PRINTF("[WiFi] Invio %u byte di dati fittizi...\n", (unsigned)f.size());
   DBG_PRINTF("[WiFi] Endpoint: %s\n", httpEndpoint.c_str());
   DBG_PRINTF("[WiFi] Heap libero: %u byte\n", ESP.getFreeHeap());
 
@@ -525,7 +525,6 @@ static void sendWiFiData() {
     http.addHeader(F("Content-Type"), F("text/csv"));
     http.addHeader(F("X-Device-ID"), WiFi.macAddress());
     
-    // Invia l'intervallo di misura in secondi come header
     char intervalStr[16];
     sprintf(intervalStr, "%llu", SLEEP_US / 1000000ULL);
     http.addHeader(F("X-Reading-Interval"), intervalStr);
