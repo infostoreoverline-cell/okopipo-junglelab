@@ -19,7 +19,7 @@
  */
 
 // URL Google Apps Script — aggiornare dopo ogni re-deploy GAS.
-const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyRDURF4GQMy5dC9_0LdXAObEXHyYUvm6HR1qFAVTFgWLHl9LL9NOZCI3hToTnqWIvwzQ/exec';
+const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyR8cO6Dy9NE1YWqifTwqqLrSCG_vFfcS0Z4ZWD6y8VwyDbHtaeLIwlaRTtoExvjBEcOQ/exec';
 
 const MAX_RETRIES       = 3;
 const RETRY_BASE_DELAY  = 1000; // ms

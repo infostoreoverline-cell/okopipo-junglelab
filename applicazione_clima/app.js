@@ -4,7 +4,7 @@
 
 // ── STATO GLOBALE DELL'APPLICAZIONE ───────────────────────────────
 const AppState = {
-    scriptUrl: localStorage.getItem('okopipi_script_url') || 'https://script.google.com/macros/s/AKfycbyRDURF4GQMy5dC9_0LdXAObEXHyYUvm6HR1qFAVTFgWLHl9LL9NOZCI3hToTnqWIvwzQ/exec',
+    scriptUrl: localStorage.getItem('okopipi_script_url') || 'https://script.google.com/macros/s/AKfycbyR8cO6Dy9NE1YWqifTwqqLrSCG_vFfcS0Z4ZWD6y8VwyDbHtaeLIwlaRTtoExvjBEcOQ/exec',
     activeRange: '7d',
     selectedDevice: 'all',
     rawData: [],
