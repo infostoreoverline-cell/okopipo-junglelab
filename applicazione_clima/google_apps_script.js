@@ -337,9 +337,67 @@ function doPost(e) {
       }
     }
     
-    // 3. GENERAZIONE TIMESTAMPS A RITROSO (60 secondi l'uno)
+    // 3. DEDUPLICAZIONE RIGHE DUPLICATE
+    // Se riceviamo lo stesso pacchetto a distanza ravvicinata (es. per retry di rete), lo scartiamo
     var nowMs = Date.now();
-    var INTERVAL_MS = 60 * 1000; // Intervallo standard di 60s
+    if (deviceId !== 'unknown' && readings.length > 0) {
+      var lastRowIdx = datiSheet.getLastRow();
+      if (lastRowIdx > 1) {
+        var checkLimit = Math.min(20, lastRowIdx - 1);
+        var recentRows = datiSheet.getRange(lastRowIdx - checkLimit + 1, 1, checkLimit, 4).getValues();
+        
+        var lastDeviceRow = null;
+        for (var k = recentRows.length - 1; k >= 0; k--) {
+          if (String(recentRows[k][1]).trim().toLowerCase() === deviceId.toLowerCase()) {
+            lastDeviceRow = recentRows[k];
+            break;
+          }
+        }
+        
+        if (lastDeviceRow) {
+          var lastTimeVal = lastDeviceRow[0];
+          var lastTimeMs = 0;
+          if (lastTimeVal instanceof Date) {
+            lastTimeMs = lastTimeVal.getTime();
+          } else {
+            lastTimeMs = Date.parse(lastTimeVal);
+          }
+          
+          var lastPayloadReading = readings[readings.length - 1];
+          var lastPayloadTemp = lastPayloadReading.t10 / 10.0;
+          var lastPayloadHum = lastPayloadReading.h10 / 10.0;
+          
+          var lastSheetTemp = parseFloat(lastDeviceRow[2]);
+          var lastSheetHum = parseFloat(lastDeviceRow[3]);
+          
+          // Se l'ultima riga scritta è recente (< 5 min) e ha gli stessi valori dell'ultimo dato inviato, saltiamo
+          if (Math.abs(nowMs - lastTimeMs) < 300000 && 
+              Math.abs(lastPayloadTemp - lastSheetTemp) < 0.01 && 
+              Math.abs(lastPayloadHum - lastSheetHum) < 0.01) {
+            return buildJsonResponse({
+              status: 'success',
+              device_id: deviceId,
+              written: 0,
+              discarded: 0,
+              message: 'Dati duplicati rilevati ed eliminati automaticamente.'
+            });
+          }
+        }
+      }
+    }
+
+    // 4. GENERAZIONE TIMESTAMPS A RITROSO
+    // Determina l'intervallo di lettura (default 15 minuti = 900 secondi se non specificato)
+    var intervalSec = 900;
+    if (typeof datiJson !== 'undefined' && datiJson && datiJson.interval !== undefined) {
+      intervalSec = parseInt(datiJson.interval, 10);
+    } else if (e.parameter && e.parameter.interval) {
+      intervalSec = parseInt(e.parameter.interval, 10);
+    } else if (e.parameter && e.parameter.reading_interval) {
+      intervalSec = parseInt(e.parameter.reading_interval, 10);
+    }
+    
+    var INTERVAL_MS = intervalSec * 1000;
     var totalReadings = readings.length;
     var batchRows = [];
     
@@ -354,7 +412,7 @@ function doPost(e) {
       }
       
       // Calcola il timestamp relativo a ritroso
-      // i = 0 è il più vecchio (ora - (N-1)*60s), i = N-1 è il più recente (ora)
+      // j = 0 è il più vecchio (ora - (N-1)*interval), j = N-1 è il più recente (ora)
       var readingMs = nowMs - (totalReadings - 1 - j) * INTERVAL_MS;
       var readingIso = Utilities.formatDate(
         new Date(readingMs),
